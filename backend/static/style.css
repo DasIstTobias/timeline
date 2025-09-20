@@ -297,6 +297,7 @@ button:hover {
 
 .burger-menu-content button:last-child {
     border-radius: 0 0 6px 6px;
+    color: var(--error-color);
 }
 
 /* Timeline Content */
@@ -340,7 +341,7 @@ button:hover {
 .event-item::before {
     content: '';
     position: absolute;
-    left: -52px;
+    left: -54px;
     top: 1.5rem;
     width: 16px;
     height: 16px;
@@ -382,11 +383,16 @@ button:hover {
     margin-bottom: 1rem;
     font-size: 0.9rem;
     color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.event-timer .time-row {
+    margin-bottom: 0.3rem;
 }
 
 .event-timer .time-value {
     font-weight: 600;
-    font-size: 1rem;
+    font-size: 1.1rem;
     color: var(--text-primary);
 }
 
@@ -411,13 +417,13 @@ button:hover {
 }
 
 .delete-event-btn {
-    background-color: var(--error-color);
+    background-color: #6c757d;
     padding: 0.5rem 1rem;
     font-size: 0.85rem;
 }
 
 .delete-event-btn:hover {
-    background-color: #c82333;
+    background-color: #5a6268;
 }
 
 /* Bottom Bar Components */
@@ -547,7 +553,7 @@ button:hover {
 }
 
 .overlay-header h2 {
-    color: var(--accent-color);
+    color: var(--text-primary);
     font-size: 1.5rem;
 }
 
@@ -576,6 +582,26 @@ button:hover {
     padding: 2rem;
 }
 
+/* Admin Password Overlay Content */
+#admin-password-form {
+    padding: 2rem;
+}
+
+#admin-password-form .form-group {
+    margin-left: 0;
+    margin-right: 0;
+}
+
+/* Add Event Overlay Content */
+#add-event-form {
+    padding: 2rem;
+}
+
+#add-event-form .form-group {
+    margin-left: 0;
+    margin-right: 0;
+}
+
 .settings-section {
     margin-bottom: 2rem;
     padding-bottom: 1.5rem;
@@ -592,12 +618,12 @@ button:hover {
 }
 
 .save-btn {
-    background-color: var(--success-color);
+    background-color: #1f4e79;
     margin-top: 0.5rem;
 }
 
 .save-btn:hover {
-    background-color: #218838;
+    background-color: #174063;
 }
 
 /* Backup Overlay */
@@ -630,6 +656,75 @@ button:hover {
 /* Add Event Overlay */
 .time-selector {
     margin-top: 0.5rem;
+}
+
+.time-switch-container {
+    margin-bottom: 1rem;
+}
+
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 200px;
+    height: 40px;
+    cursor: pointer;
+}
+
+.toggle-switch input[type="checkbox"] {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--accent-color);
+    border-radius: 20px;
+    transition: 0.3s;
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 32px;
+    width: 96px;
+    left: 4px;
+    top: 4px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 16px;
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+    transform: translateX(96px);
+}
+
+.toggle-labels {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: white;
+    pointer-events: none;
+}
+
+.toggle-label-now {
+    z-index: 1;
+}
+
+.toggle-label-custom {
+    z-index: 1;
 }
 
 .time-switch {
@@ -666,19 +761,40 @@ button:hover {
     margin-bottom: 1rem;
     max-height: 150px;
     overflow-y: auto;
-    border: 1px solid var(--border-color);
-    border-radius: 6px;
-    padding: 0.5rem;
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1rem;
+    background-color: var(--secondary-bg);
 }
 
 .tag-checkbox-item {
     display: flex;
     align-items: center;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.75rem;
+    padding: 0.5rem;
+    border-radius: 6px;
+    background-color: var(--primary-bg);
+    border: 1px solid var(--border-color);
+    transition: background-color 0.2s;
+}
+
+.tag-checkbox-item:hover {
+    background-color: var(--hover-bg);
+}
+
+.tag-checkbox-item:last-child {
+    margin-bottom: 0;
 }
 
 .tag-checkbox-item input[type="checkbox"] {
-    margin-right: 0.5rem;
+    margin-right: 0.75rem;
+    width: 16px;
+    height: 16px;
+}
+
+.tag-checkbox-item label {
+    cursor: pointer;
+    font-weight: 500;
 }
 
 .new-tag-input {
@@ -802,11 +918,11 @@ button:hover {
 }
 
 .delete-btn {
-    background-color: var(--error-color);
+    background-color: #b91c1c;
 }
 
 .delete-btn:hover {
-    background-color: #c82333;
+    background-color: #991b1b;
 }
 
 /* Responsive Design */
@@ -832,7 +948,7 @@ button:hover {
     }
     
     .event-item::before {
-        left: -42px;
+        left: -44px;
     }
     
     .overlay-content {

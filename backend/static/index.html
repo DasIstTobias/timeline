@@ -182,6 +182,7 @@
                             <option value="dd/mm/yyyy">DD/MM/YYYY</option>
                             <option value="mm/dd/yyyy">MM/DD/YYYY</option>
                             <option value="yyyy-mm-dd">YYYY-MM-DD</option>
+                            <option value="dd mmm yyyy">1 January 2000</option>
                         </select>
                         <button id="save-date-format" class="save-btn">Save</button>
                     </div>
@@ -237,14 +238,14 @@
                 <div class="form-group">
                     <label>Time *</label>
                     <div class="time-selector">
-                        <div class="time-switch">
-                            <label class="switch">
-                                <input type="radio" name="time-mode" value="now" checked>
-                                <span>Now</span>
-                            </label>
-                            <label class="switch">
-                                <input type="radio" name="time-mode" value="custom">
-                                <span>Custom</span>
+                        <div class="time-switch-container">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="time-toggle">
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-labels">
+                                    <span class="toggle-label-now">Now</span>
+                                    <span class="toggle-label-custom">Custom</span>
+                                </span>
                             </label>
                         </div>
                         <div id="custom-time-inputs" class="custom-time-inputs" style="display: none;">

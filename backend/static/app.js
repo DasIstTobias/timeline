@@ -76,9 +76,7 @@ class TimelineApp {
         
         // Add event
         document.getElementById('add-event-form').addEventListener('submit', (e) => this.handleAddEvent(e));
-        document.querySelectorAll('input[name="time-mode"]').forEach(radio => {
-            radio.addEventListener('change', () => this.toggleCustomTime());
-        });
+        document.getElementById('time-toggle').addEventListener('change', () => this.toggleCustomTime());
         document.getElementById('add-tag-btn').addEventListener('click', () => this.addNewTag());
         
         // Admin password change
@@ -433,8 +431,6 @@ class TimelineApp {
         const months = Math.floor(days / 30);
         const years = Math.floor(days / 365);
         
-        const parts = [];
-        
         // Always show all time units, even if they're 0
         const yearValue = years;
         const monthValue = months % 12;
@@ -443,14 +439,21 @@ class TimelineApp {
         const minuteValue = minutes % 60;
         const secondValue = seconds % 60;
         
-        parts.push(`<span class="time-value">${yearValue}</span> Year${yearValue !== 1 ? 's' : ''}`);
-        parts.push(`<span class="time-value">${monthValue}</span> Month${monthValue !== 1 ? 's' : ''}`);
-        parts.push(`<span class="time-value">${dayValue}</span> Day${dayValue !== 1 ? 's' : ''}`);
-        parts.push(`<span class="time-value">${hourValue}</span> Hour${hourValue !== 1 ? 's' : ''}`);
-        parts.push(`<span class="time-value">${minuteValue}</span> Minute${minuteValue !== 1 ? 's' : ''}`);
-        parts.push(`<span class="time-value">${secondValue}</span> Second${secondValue !== 1 ? 's' : ''}`);
+        // First row: Years, Months, Days
+        const firstRow = [
+            `<span class="time-value">${yearValue}</span> Year${yearValue !== 1 ? 's' : ''}`,
+            `<span class="time-value">${monthValue}</span> Month${monthValue !== 1 ? 's' : ''}`,
+            `<span class="time-value">${dayValue}</span> Day${dayValue !== 1 ? 's' : ''}`
+        ].join(' ');
         
-        return parts.join(' ') + ' ago';
+        // Second row: Hours, Minutes, Seconds
+        const secondRow = [
+            `<span class="time-value">${hourValue}</span> Hour${hourValue !== 1 ? 's' : ''}`,
+            `<span class="time-value">${minuteValue}</span> Minute${minuteValue !== 1 ? 's' : ''}`,
+            `<span class="time-value">${secondValue}</span> Second${secondValue !== 1 ? 's' : ''}`
+        ].join(' ');
+        
+        return `<div class="time-row">${firstRow}</div><div class="time-row">${secondRow}</div><div>ago</div>`;
     }
 
     updateEventTimers() {
@@ -493,6 +496,11 @@ class TimelineApp {
                 break;
             case 'yyyy-mm-dd':
                 dateStr = `${year}-${month}-${day}`;
+                break;
+            case 'dd mmm yyyy':
+                const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                    'July', 'August', 'September', 'October', 'November', 'December'];
+                dateStr = `${date.getDate()} ${monthNames[date.getMonth()]} ${year}`;
                 break;
             default: // dd/mm/yyyy
                 dateStr = `${day}/${month}/${year}`;
@@ -677,9 +685,9 @@ class TimelineApp {
         const description = document.getElementById('event-description').value;
         
         let timestamp;
-        const timeMode = document.querySelector('input[name="time-mode"]:checked').value;
+        const isCustomTime = document.getElementById('time-toggle').checked;
         
-        if (timeMode === 'now') {
+        if (!isCustomTime) {
             timestamp = new Date();
         } else {
             const day = parseInt(document.getElementById('day').value);
@@ -738,7 +746,7 @@ class TimelineApp {
 
     toggleCustomTime() {
         const customInputs = document.getElementById('custom-time-inputs');
-        const isCustom = document.querySelector('input[name="time-mode"]:checked').value === 'custom';
+        const isCustom = document.getElementById('time-toggle').checked;
         customInputs.style.display = isCustom ? 'grid' : 'none';
         
         if (isCustom) {
