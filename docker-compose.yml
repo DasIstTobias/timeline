@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  database:
+    image: postgres:17-trixie
+    environment:
+      POSTGRES_DB: timeline
+      POSTGRES_USER: timeline_user
+      POSTGRES_PASSWORD: timeline_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - timeline_network
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql://timeline_user:timeline_password@database:5432/timeline
+      RUST_LOG: info
+    depends_on:
+      - database
+    networks:
+      - timeline_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  timeline_network:
+    driver: bridge
