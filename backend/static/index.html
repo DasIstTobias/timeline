@@ -439,6 +439,29 @@
         </div>
     </div>
 
+    <!-- Password Prompt Overlay (for page refresh authentication) -->
+    <div id="password-prompt-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2>Enter Password</h2>
+                <button class="close-overlay" id="password-prompt-close">&times;</button>
+            </div>
+            <div class="password-prompt-content">
+                <p>Please enter your password to decrypt your data.</p>
+                <p class="info-text">Your session is valid, but your encryption key is needed to access your timeline events.</p>
+                <form id="password-prompt-form">
+                    <div class="form-group">
+                        <label for="password-prompt-input">Password:</label>
+                        <input type="password" id="password-prompt-input" required autocomplete="current-password">
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="primary-btn">Unlock Timeline</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/crypto.js"></script></script></script>
     <script src="/static/app.js"></script>
 </body>

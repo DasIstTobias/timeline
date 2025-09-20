@@ -178,9 +178,70 @@ class TimelineApp {
     async showUserTimeline() {
         this.hideAllScreens();
         document.getElementById('user-screen').style.display = 'flex';
+        
+        // If we don't have the user password (e.g., after page refresh), prompt for it
+        if (!this.userPassword) {
+            await this.promptForPassword();
+        }
+        
         await this.loadUserData();
         this.renderTimeline();
         this.updateEventCounts();
+    }
+
+    async promptForPassword() {
+        return new Promise((resolve, reject) => {
+            const overlay = document.getElementById('password-prompt-overlay');
+            const form = document.getElementById('password-prompt-form');
+            const passwordInput = document.getElementById('password-prompt-input');
+            const closeBtn = document.getElementById('password-prompt-close');
+            
+            // Clear previous input
+            passwordInput.value = '';
+            
+            // Show overlay
+            overlay.style.display = 'flex';
+            passwordInput.focus();
+            
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                const password = passwordInput.value;
+                
+                if (!password) {
+                    this.showError('Password is required', 'Password Required');
+                    return;
+                }
+                
+                // Verify password by attempting to load settings (simplest encrypted data)
+                try {
+                    this.userPassword = password;
+                    await this.loadSettings();
+                    
+                    // If successful, hide overlay and resolve
+                    overlay.style.display = 'none';
+                    form.removeEventListener('submit', handleSubmit);
+                    closeBtn.removeEventListener('click', handleClose);
+                    resolve();
+                } catch (error) {
+                    this.userPassword = null;
+                    this.showError('Incorrect password. Please try again.', 'Authentication Failed');
+                    passwordInput.value = '';
+                    passwordInput.focus();
+                }
+            };
+            
+            const handleClose = () => {
+                // If user cancels, log them out
+                overlay.style.display = 'none';
+                form.removeEventListener('submit', handleSubmit);
+                closeBtn.removeEventListener('click', handleClose);
+                this.logout();
+                reject(new Error('Password prompt cancelled'));
+            };
+            
+            form.addEventListener('submit', handleSubmit);
+            closeBtn.addEventListener('click', handleClose);
+        });
     }
 
     hideAllScreens() {

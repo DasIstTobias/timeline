@@ -834,6 +834,41 @@ button:hover {
     }
 }
 
+/* Password Prompt Overlay */
+.password-prompt-content {
+    padding: 1rem 0;
+}
+
+.password-prompt-content .info-text {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin-bottom: 1.5rem;
+    line-height: 1.4;
+}
+
+.password-prompt-content .form-group {
+    margin-bottom: 1.5rem;
+}
+
+.password-prompt-content .form-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.password-prompt-content .primary-btn {
+    background-color: var(--accent-color);
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.password-prompt-content .primary-btn:hover {
+    background-color: color-mix(in srgb, var(--accent-color) 85%, black);
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
     width: 8px;
