@@ -1,5 +1,5 @@
 use axum::http::HeaderMap;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use uuid::Uuid;

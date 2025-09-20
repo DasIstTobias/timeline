@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{State},
     http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -16,9 +16,8 @@ mod auth;
 mod crypto;
 mod models;
 
-use auth::{create_session, verify_session, AuthState};
+use auth::{create_session, verify_session};
 use crypto::{generate_random_password, hash_password, verify_password};
-use models::{Event, Tag, User};
 
 type AppState = Arc<AppData>;
 
@@ -63,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/register", post(register))
         .route("/api/change-password", post(change_password))
         .route("/api/users", get(list_users))
-        .route("/api/users", post(create_user))
+        .route("/api/users", post(register))
         .route("/api/users/:id", post(delete_user))
         .route("/api/events", get(get_events))
         .route("/api/events", post(create_event))
@@ -95,7 +94,7 @@ async fn get_user_info(
     })))
 }
 
-async fn serve_index(headers: HeaderMap, State(state): State<AppState>) -> Response {
+async fn serve_index(_headers: HeaderMap, State(_state): State<AppState>) -> Response {
     let html = tokio::fs::read_to_string("static/index.html").await
         .unwrap_or_else(|_| include_str!("../static/index.html").to_string());
     Html(html).into_response()
@@ -440,7 +439,7 @@ async fn delete_event(
     headers: HeaderMap,
     axum::extract::Path(event_id): axum::extract::Path<Uuid>,
     State(state): State<AppState>,
-    Json(req): Json<DeleteEventRequest>,
+    Json(_req): Json<DeleteEventRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
