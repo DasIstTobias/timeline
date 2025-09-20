@@ -1,17 +1,32 @@
-# Rust
+# Rust build artifacts
 /backend/target/
+backend/target/
+**/target/
 Cargo.lock
 
-# IDE
+# Admin credentials (generated at runtime)
+admin_credentials.txt
+backend/admin_credentials.txt
+
+# IDE files
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# OS
+# OS files
 .DS_Store
 Thumbs.db
 
 # Docker
 .env
+.dockerignore
 
 # Logs
 *.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+.tmp
