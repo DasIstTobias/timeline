@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   database:
-    image: postgres:13-trixie
+    image: postgres:17-trixie
     environment:
       POSTGRES_DB: timeline
       POSTGRES_USER: timeline_user
