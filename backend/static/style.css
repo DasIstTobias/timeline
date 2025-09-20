@@ -767,6 +767,15 @@ button:hover {
     background: color-mix(in srgb, var(--accent-color) 90%, black);
 }
 
+.info-content {
+    padding: 2rem;
+}
+
+.info-content p {
+    margin-bottom: 1rem;
+    color: var(--text-primary);
+}
+
 .delete-actions {
     display: flex;
     gap: 1rem;

@@ -65,6 +65,10 @@ class TimelineApp {
         document.getElementById('confirm-password-change').addEventListener('click', () => this.confirmPasswordChange());
         document.getElementById('cancel-password-change').addEventListener('click', () => this.closeOverlay(document.getElementById('password-confirm-overlay')));
         
+        // Admin password change overlays
+        document.getElementById('confirm-admin-password-change').addEventListener('click', () => this.confirmAdminPasswordChange());
+        document.getElementById('cancel-admin-password-change').addEventListener('click', () => this.closeOverlay(document.getElementById('admin-password-confirm-overlay')));
+        
         // Backup
         document.getElementById('export-btn').addEventListener('click', () => this.exportEvents());
         document.getElementById('import-btn').addEventListener('click', () => this.importEvents());
@@ -556,10 +560,10 @@ class TimelineApp {
                 document.getElementById('new-username').value = '';
                 await this.loadUsers();
             } else {
-                alert(data.message || 'Failed to create user');
+                this.showError('User Creation Failed', data.message || 'Failed to create user');
             }
         } catch (error) {
-            alert('Network error. Please try again.');
+            this.showError('Network Error', 'Network error. Please try again.');
         }
     }
 
@@ -587,10 +591,10 @@ class TimelineApp {
                         await this.loadUsers();
                         this.closeOverlay(document.getElementById('delete-confirmation-overlay'));
                     } else {
-                        alert(data.message || 'Failed to delete user');
+                        this.showError('User Deletion Failed', data.message || 'Failed to delete user');
                     }
                 } catch (error) {
-                    alert('Network error. Please try again.');
+                    this.showError('Network Error', 'Network error. Please try again.');
                 }
             }
         );
@@ -656,10 +660,10 @@ class TimelineApp {
                 this.renderTimeline();
                 this.updateEventCounts();
             } else {
-                alert('Failed to create event');
+                this.showError('Event Creation Failed', 'Failed to create event');
             }
         } catch (error) {
-            alert('Network error. Please try again.');
+            this.showError('Network Error', 'Network error. Please try again.');
         }
     }
 
@@ -717,7 +721,7 @@ class TimelineApp {
                 const confirmationTitle = document.getElementById('confirmation-input').value;
                 
                 if (confirmationTitle !== eventTitle) {
-                    alert('Event title does not match. Please enter the exact title.');
+                    this.showError('Title Mismatch', 'Event title does not match. Please enter the exact title.');
                     return;
                 }
                 
@@ -739,10 +743,10 @@ class TimelineApp {
                         this.updateEventCounts();
                         this.closeOverlay(document.getElementById('delete-confirmation-overlay'));
                     } else {
-                        alert(data.message || 'Failed to delete event');
+                        this.showError('Event Deletion Failed', data.message || 'Failed to delete event');
                     }
                 } catch (error) {
-                    alert('Network error. Please try again.');
+                    this.showError('Network Error', 'Network error. Please try again.');
                 }
             }
         );
@@ -925,10 +929,10 @@ class TimelineApp {
             const data = await response.json();
             
             if (!data.success) {
-                alert('Failed to save settings');
+                this.showError('Settings Error', 'Failed to save settings');
             }
         } catch (error) {
-            alert('Network error. Please try again.');
+            this.showError('Network Error', 'Network error. Please try again.');
         }
     }
 
@@ -970,7 +974,7 @@ class TimelineApp {
             const importData = JSON.parse(text);
             
             if (!importData.events || !Array.isArray(importData.events)) {
-                alert('Invalid backup file format');
+                this.showError('Import Error', 'Invalid backup file format');
                 return;
             }
             
@@ -1003,14 +1007,14 @@ class TimelineApp {
                 }
             }
             
-            alert(`Successfully imported ${importData.events.length} events`);
+            this.showSuccess('Import Complete', `Successfully imported ${importData.events.length} events`);
             await this.loadUserData();
             this.renderTimeline();
             this.updateEventCounts();
             this.closeOverlay(document.getElementById('backup-overlay'));
             
         } catch (error) {
-            alert('Failed to import backup file');
+            this.showError('Import Error', 'Failed to import backup file');
         }
         
         // Reset file input
@@ -1026,9 +1030,20 @@ class TimelineApp {
         const confirmPassword = document.getElementById('admin-confirm-password').value;
         
         if (newPassword !== confirmPassword) {
-            alert('New passwords do not match');
+            this.showError('Password Mismatch', 'New passwords do not match');
             return;
         }
+        
+        // Show confirmation overlay
+        this.showAdminPasswordConfirmation();
+    }
+
+    async confirmAdminPasswordChange() {
+        // Close confirmation overlay
+        this.closeOverlay(document.getElementById('admin-password-confirm-overlay'));
+        
+        const oldPassword = document.getElementById('admin-old-password').value;
+        const newPassword = document.getElementById('admin-new-password').value;
         
         try {
             const response = await fetch('/api/change-password', {
@@ -1046,14 +1061,14 @@ class TimelineApp {
             const data = await response.json();
             
             if (data.success) {
-                alert('Password changed successfully');
+                this.showSuccess('Password Changed', 'Admin password changed successfully');
                 this.closeOverlay(document.getElementById('admin-password-overlay'));
                 document.getElementById('admin-password-form').reset();
             } else {
-                alert(data.message || 'Failed to change password');
+                this.showError('Password Change Failed', data.message || 'Failed to change password');
             }
         } catch (error) {
-            alert('Network error. Please try again.');
+            this.showError('Network Error', 'Network error. Please try again.');
         }
     }
 
@@ -1097,6 +1112,28 @@ class TimelineApp {
 
     showPasswordConfirmation() {
         this.showOverlay('password-confirm-overlay');
+    }
+
+    showInfo(title, message) {
+        document.getElementById('info-title').textContent = title;
+        document.getElementById('info-message').textContent = message;
+        this.showOverlay('info-overlay');
+    }
+
+    showError(title, message) {
+        document.getElementById('error-title').textContent = title;
+        document.getElementById('error-message').textContent = message;
+        this.showOverlay('error-overlay');
+    }
+
+    showSuccess(title, message) {
+        document.getElementById('success-title').textContent = title;
+        document.getElementById('success-message').textContent = message;
+        this.showOverlay('success-overlay');
+    }
+
+    showAdminPasswordConfirmation() {
+        this.showOverlay('admin-password-confirm-overlay');
     }
 
     showDeleteConfirmation(title, message, confirmationText, onConfirm) {

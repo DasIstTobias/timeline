@@ -384,7 +384,62 @@
         </div>
     </div>
 
-    <script src="/static/crypto.js"></script></script>
+    <!-- General Message Overlays -->
+    <div id="info-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2 id="info-title">Information</h2>
+                <button class="close-overlay" id="close-info">&times;</button>
+            </div>
+            <div class="info-content">
+                <p id="info-message">Information message</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="error-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2 id="error-title">Error</h2>
+                <button class="close-overlay" id="close-error">&times;</button>
+            </div>
+            <div class="error-content">
+                <p id="error-message">Error message</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="success-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2 id="success-title">Success</h2>
+                <button class="close-overlay" id="close-success">&times;</button>
+            </div>
+            <div class="success-content">
+                <p id="success-message">Success message</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Password Change Confirmation -->
+    <div id="admin-password-confirm-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2>Admin Password Change</h2>
+                <button class="close-overlay" id="close-admin-password-confirm">&times;</button>
+            </div>
+            <div class="password-confirm-content">
+                <p>Are you sure you want to change the admin password?</p>
+                <p class="warning">This action will update the administrator credentials immediately.</p>
+                <div class="password-confirm-actions">
+                    <button id="cancel-admin-password-change" class="cancel-btn">Cancel</button>
+                    <button id="confirm-admin-password-change" class="confirm-btn">Change Password</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/crypto.js"></script></script></script>
     <script src="/static/app.js"></script>
 </body>
 </html>
