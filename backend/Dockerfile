@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY static ./static
 
 RUN cargo build --release
 
@@ -20,7 +21,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 COPY --from=builder /app/target/release/timeline-backend /app/timeline-backend
-COPY static ./static
+COPY --from=builder /app/static ./static
 
 EXPOSE 8080
 
