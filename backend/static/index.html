@@ -332,7 +332,59 @@
         </div>
     </div>
 
-    <script src="/static/crypto.js"></script>
+    <!-- Password Change Overlays -->
+    <div id="password-confirm-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2>Confirm Password Change</h2>
+                <button class="close-overlay" id="close-password-confirm">&times;</button>
+            </div>
+            <div class="password-confirm-content">
+                <p>Changing your password will temporarily decrypt and re-encrypt all your data. This process is secure but may take a moment.</p>
+                <p><strong>During this process:</strong></p>
+                <ul>
+                    <li>Your data will be temporarily decrypted in browser memory</li>
+                    <li>All encrypted data will be cleared from the server</li>
+                    <li>Your password will be updated</li>
+                    <li>All data will be re-encrypted with the new password</li>
+                    <li>Data will be restored to the server</li>
+                </ul>
+                <p class="warning">This process maintains zero-knowledge security and your data will be preserved.</p>
+                <div class="password-confirm-actions">
+                    <button id="cancel-password-change" class="cancel-btn">Cancel</button>
+                    <button id="confirm-password-change" class="confirm-btn">Continue</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="password-error-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2>Password Change Error</h2>
+                <button class="close-overlay" id="close-password-error">&times;</button>
+            </div>
+            <div class="error-content">
+                <p id="password-error-message">An error occurred during password change.</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="password-success-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2>Password Changed Successfully</h2>
+                <button class="close-overlay" id="close-password-success">&times;</button>
+            </div>
+            <div class="success-content">
+                <p>Your password has been changed successfully!</p>
+                <p>All your data has been preserved and re-encrypted with the new password.</p>
+                <p class="info">You may now continue using the application with your new password.</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/crypto.js"></script></script>
     <script src="/static/app.js"></script>
 </body>
 </html>

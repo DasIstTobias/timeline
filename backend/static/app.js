@@ -61,6 +61,10 @@ class TimelineApp {
         document.getElementById('save-time-format').addEventListener('click', () => this.saveTimeFormat());
         document.getElementById('save-date-format').addEventListener('click', () => this.saveDateFormat());
         
+        // Password change overlays
+        document.getElementById('confirm-password-change').addEventListener('click', () => this.confirmPasswordChange());
+        document.getElementById('cancel-password-change').addEventListener('click', () => this.closeOverlay(document.getElementById('password-confirm-overlay')));
+        
         // Backup
         document.getElementById('export-btn').addEventListener('click', () => this.exportEvents());
         document.getElementById('import-btn').addEventListener('click', () => this.importEvents());
@@ -757,18 +761,25 @@ class TimelineApp {
         const confirmPassword = document.getElementById('confirm-password').value;
         
         if (newPassword !== confirmPassword) {
-            alert('New passwords do not match');
+            this.showPasswordError('New passwords do not match');
             return;
         }
         
         if (oldPassword !== this.userPassword) {
-            alert('Current password is incorrect');
+            this.showPasswordError('Current password is incorrect');
             return;
         }
         
-        if (!confirm('Changing your password will temporarily decrypt and re-encrypt all your data. This process is secure but may take a moment. Continue?')) {
-            return;
-        }
+        // Show confirmation overlay
+        this.showPasswordConfirmation();
+    }
+
+    async confirmPasswordChange() {
+        // Close confirmation overlay
+        this.closeOverlay(document.getElementById('password-confirm-overlay'));
+        
+        const oldPassword = document.getElementById('old-password').value;
+        const newPassword = document.getElementById('new-password').value;
         
         try {
             // Step 1: Create temporary unencrypted backup of all data
@@ -858,7 +869,8 @@ class TimelineApp {
             this.renderTimeline();
             this.updateEventCounts();
             
-            alert('Password changed successfully. All your data has been preserved and re-encrypted with the new password.');
+            // Show success message
+            this.showPasswordSuccess();
             
             // Clear form fields
             document.getElementById('old-password').value = '';
@@ -866,7 +878,7 @@ class TimelineApp {
             document.getElementById('confirm-password').value = '';
             
         } catch (error) {
-            alert(`Password change failed: ${error.message}. Your data remains unchanged.`);
+            this.showPasswordError(`Password change failed: ${error.message}. Your data remains unchanged.`);
             console.error('Password change error:', error);
         }
     }
@@ -1072,6 +1084,19 @@ class TimelineApp {
 
     showAdminPasswordOverlay() {
         this.showOverlay('admin-password-overlay');
+    }
+
+    showPasswordError(message) {
+        document.getElementById('password-error-message').textContent = message;
+        this.showOverlay('password-error-overlay');
+    }
+
+    showPasswordSuccess() {
+        this.showOverlay('password-success-overlay');
+    }
+
+    showPasswordConfirmation() {
+        this.showOverlay('password-confirm-overlay');
     }
 
     showDeleteConfirmation(title, message, confirmationText, onConfirm) {
