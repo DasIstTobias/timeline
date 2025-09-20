@@ -1,0 +1,17 @@
+# Rust
+/backend/target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.env
+
+# Logs
+*.log
