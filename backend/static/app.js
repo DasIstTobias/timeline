@@ -374,14 +374,22 @@ class TimelineApp {
         
         const parts = [];
         
-        if (years > 0) parts.push(`<span class="time-value">${years}</span> year${years > 1 ? 's' : ''}`);
-        if (months % 12 > 0) parts.push(`<span class="time-value">${months % 12}</span> month${months % 12 > 1 ? 's' : ''}`);
-        if (days % 30 > 0) parts.push(`<span class="time-value">${days % 30}</span> day${days % 30 > 1 ? 's' : ''}`);
-        if (hours % 24 > 0) parts.push(`<span class="time-value">${hours % 24}</span> hour${hours % 24 > 1 ? 's' : ''}`);
-        if (minutes % 60 > 0) parts.push(`<span class="time-value">${minutes % 60}</span> minute${minutes % 60 > 1 ? 's' : ''}`);
-        if (seconds % 60 > 0) parts.push(`<span class="time-value">${seconds % 60}</span> second${seconds % 60 > 1 ? 's' : ''}`);
+        // Always show all time units, even if they're 0
+        const yearValue = years;
+        const monthValue = months % 12;
+        const dayValue = days % 30;
+        const hourValue = hours % 24;
+        const minuteValue = minutes % 60;
+        const secondValue = seconds % 60;
         
-        return parts.slice(0, 3).join(' ') + ' ago';
+        parts.push(`<span class="time-value">${yearValue}</span> Year${yearValue !== 1 ? 's' : ''}`);
+        parts.push(`<span class="time-value">${monthValue}</span> Month${monthValue !== 1 ? 's' : ''}`);
+        parts.push(`<span class="time-value">${dayValue}</span> Day${dayValue !== 1 ? 's' : ''}`);
+        parts.push(`<span class="time-value">${hourValue}</span> Hour${hourValue !== 1 ? 's' : ''}`);
+        parts.push(`<span class="time-value">${minuteValue}</span> Minute${minuteValue !== 1 ? 's' : ''}`);
+        parts.push(`<span class="time-value">${secondValue}</span> Second${secondValue !== 1 ? 's' : ''}`);
+        
+        return parts.join(' ') + ' ago';
     }
 
     updateEventTimers() {
