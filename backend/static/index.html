@@ -91,24 +91,29 @@
 
         <!-- Bottom Bar -->
         <div class="bottom-bar">
-            <div class="search-section">
-                <div class="search-container">
-                    <input type="text" id="search-input" placeholder="Search events..." class="search-input">
-                    <button id="search-btn" class="search-button">Search</button>
+            <div class="left-section">
+                <div class="search-section">
+                    <div class="search-container">
+                        <input type="text" id="search-input" placeholder="Search events..." class="search-input">
+                        <button id="search-btn" class="search-button">Search</button>
+                    </div>
+                </div>
+                
+                <div class="filter-section">
+                    <button id="tag-filter-btn" class="tag-filter-button">Tags</button>
+                    <div id="tag-filter-menu" class="tag-filter-menu" style="display: none;">
+                        <div class="tag-filter-list" id="tag-filter-list"></div>
+                    </div>
                 </div>
             </div>
             
-            <div class="add-event-section">
-                <button id="add-event-btn" class="add-event-button">Add Event</button>
-            </div>
-            
-            <div class="filter-section">
-                <button id="tag-filter-btn" class="tag-filter-button">Tags</button>
-                <div id="tag-filter-menu" class="tag-filter-menu" style="display: none;">
-                    <div class="tag-filter-list" id="tag-filter-list"></div>
-                </div>
+            <div class="right-section">
                 <div class="filtered-count">
                     <span id="filtered-event-count">0 Events</span>
+                </div>
+                
+                <div class="add-event-section">
+                    <button id="add-event-btn" class="add-event-button">Add Event</button>
                 </div>
             </div>
         </div>

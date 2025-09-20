@@ -219,6 +219,16 @@ button:hover {
 .bottom-bar {
     border-top: 2px solid var(--border-color);
     border-bottom: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.left-section,
+.right-section {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
 }
 
 .event-count {
@@ -412,7 +422,7 @@ button:hover {
 
 /* Bottom Bar Components */
 .search-section {
-    flex: 1;
+    flex: 0 0 auto;
 }
 
 .search-container {
@@ -454,15 +464,16 @@ button:hover {
 .filter-section {
     display: flex;
     align-items: center;
-    gap: 1rem;
     position: relative;
 }
 
 .tag-filter-button {
     padding: 0.75rem 1rem;
-    border-radius: 8px;
+    border-radius: 20px;
     background-color: var(--accent-color);
     color: white;
+    height: 50px;
+    border: 2px solid var(--accent-color);
 }
 
 .tag-filter-menu {
