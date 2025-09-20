@@ -64,6 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/users", get(list_users))
         .route("/api/users", post(register))
         .route("/api/users/:id", post(delete_user))
+        .route("/api/user-data", post(clear_user_data))
         .route("/api/events", get(get_events))
         .route("/api/events", post(create_event))
         .route("/api/events/:id", post(delete_event))
@@ -333,6 +334,41 @@ async fn delete_user(
             "message": "User not found"
         })))
     }
+}
+
+async fn clear_user_data(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Delete all user's events (this will cascade to event_tags)
+    sqlx::query("DELETE FROM events WHERE user_id = $1")
+        .bind(auth_state.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Delete all user's tags
+    sqlx::query("DELETE FROM tags WHERE user_id = $1")
+        .bind(auth_state.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Clear user's settings and display name
+    sqlx::query("UPDATE users SET settings_encrypted = NULL, display_name_encrypted = NULL WHERE id = $1")
+        .bind(auth_state.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(Json(serde_json::json!({"success": true})))
 }
 
 async fn get_events(

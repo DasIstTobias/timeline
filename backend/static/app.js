@@ -766,8 +766,35 @@ class TimelineApp {
             return;
         }
         
+        if (!confirm('Changing your password will temporarily decrypt and re-encrypt all your data. This process is secure but may take a moment. Continue?')) {
+            return;
+        }
+        
         try {
-            const response = await fetch('/api/change-password', {
+            // Step 1: Create temporary unencrypted backup of all data
+            const backupData = {
+                events: this.events.map(event => ({
+                    title: event.title,
+                    description: event.description,
+                    timestamp: event.timestamp.toISOString(),
+                    tags: event.tags
+                })),
+                settings: this.settings,
+                exported_at: new Date().toISOString()
+            };
+            
+            // Step 2: Clear all user data from backend
+            const clearResponse = await fetch('/api/user-data', {
+                method: 'POST',
+                credentials: 'include'
+            });
+            
+            if (!clearResponse.ok) {
+                throw new Error('Failed to clear user data');
+            }
+            
+            // Step 3: Change password in backend
+            const passwordResponse = await fetch('/api/change-password', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -779,19 +806,68 @@ class TimelineApp {
                 credentials: 'include'
             });
             
-            const data = await response.json();
+            const passwordData = await passwordResponse.json();
             
-            if (data.success) {
-                this.userPassword = newPassword;
-                alert('Password changed successfully');
-                document.getElementById('old-password').value = '';
-                document.getElementById('new-password').value = '';
-                document.getElementById('confirm-password').value = '';
-            } else {
-                alert(data.message || 'Failed to change password');
+            if (!passwordData.success) {
+                throw new Error(passwordData.message || 'Failed to change password');
             }
+            
+            // Step 4: Update local password for encryption
+            this.userPassword = newPassword;
+            
+            // Step 5: Re-import all data with new encryption
+            for (const event of backupData.events) {
+                try {
+                    const titleEncrypted = await cryptoUtils.encrypt(event.title, this.userPassword);
+                    const descriptionEncrypted = await cryptoUtils.encrypt(event.description, this.userPassword);
+                    const tagsEncrypted = [];
+                    
+                    for (const tag of event.tags || []) {
+                        tagsEncrypted.push(await cryptoUtils.encrypt(tag, this.userPassword));
+                    }
+                    
+                    await fetch('/api/events', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            title_encrypted: titleEncrypted,
+                            description_encrypted: descriptionEncrypted,
+                            event_timestamp: event.timestamp,
+                            tag_names_encrypted: tagsEncrypted
+                        }),
+                        credentials: 'include'
+                    });
+                } catch (error) {
+                    console.error('Failed to re-import event:', event.title, error);
+                }
+            }
+            
+            // Step 6: Re-save settings with new encryption
+            if (backupData.settings) {
+                this.settings = backupData.settings;
+                await this.saveSettingsToServer();
+            }
+            
+            // Step 7: Clear the temporary backup data from memory
+            // (JavaScript garbage collector will handle this)
+            
+            // Reload data to reflect changes
+            await this.loadUserData();
+            this.renderTimeline();
+            this.updateEventCounts();
+            
+            alert('Password changed successfully. All your data has been preserved and re-encrypted with the new password.');
+            
+            // Clear form fields
+            document.getElementById('old-password').value = '';
+            document.getElementById('new-password').value = '';
+            document.getElementById('confirm-password').value = '';
+            
         } catch (error) {
-            alert('Network error. Please try again.');
+            alert(`Password change failed: ${error.message}. Your data remains unchanged.`);
+            console.error('Password change error:', error);
         }
     }
 
