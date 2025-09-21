@@ -6,13 +6,17 @@ class TimelineApp {
         this.events = [];
         this.tags = [];
         this.filteredEvents = [];
+        this.notes = '';
         this.settings = {
             theme: 'device',
             timeFormat: '24h',
             dateFormat: 'dd/mm/yyyy',
-            displayName: ''
+            displayName: '',
+            timeSeparator: 'weekly',
+            accentColor: '#710193'
         };
         this.eventTimers = new Map();
+        this.notesAutosaveTimer = null;
         
         this.init();
     }
@@ -38,9 +42,11 @@ class TimelineApp {
         // User functions
         document.getElementById('user-logout-btn').addEventListener('click', () => this.logout());
         document.getElementById('burger-btn').addEventListener('click', () => this.toggleBurgerMenu());
+        document.getElementById('notes-btn').addEventListener('click', () => this.showNotesOverlay());
         document.getElementById('settings-btn').addEventListener('click', () => this.showSettingsOverlay());
         document.getElementById('backup-btn').addEventListener('click', () => this.showBackupOverlay());
         document.getElementById('add-event-btn').addEventListener('click', () => this.showAddEventOverlay());
+        document.getElementById('empty-add-events-btn').addEventListener('click', () => this.showAddEventOverlay());
         
         // Search and filter
         document.getElementById('search-btn').addEventListener('click', () => this.performSearch());
@@ -60,6 +66,8 @@ class TimelineApp {
         document.getElementById('save-theme').addEventListener('click', () => this.saveTheme());
         document.getElementById('save-time-format').addEventListener('click', () => this.saveTimeFormat());
         document.getElementById('save-date-format').addEventListener('click', () => this.saveDateFormat());
+        document.getElementById('save-time-separator').addEventListener('click', () => this.saveTimeSeparator());
+        document.getElementById('save-accent-color').addEventListener('click', () => this.saveAccentColor());
         
         // Password change overlays
         document.getElementById('confirm-password-change').addEventListener('click', () => this.confirmPasswordChange());
@@ -183,6 +191,7 @@ class TimelineApp {
         }
         
         await this.loadUserData();
+        this.updateUserDisplayName();
         this.renderTimeline();
         this.updateEventCounts();
     }
@@ -252,7 +261,8 @@ class TimelineApp {
         await Promise.all([
             this.loadEvents(),
             this.loadTags(),
-            this.loadSettings()
+            this.loadSettings(),
+            this.loadNotes()
         ]);
     }
 
@@ -354,9 +364,22 @@ class TimelineApp {
         // Apply other settings
         document.getElementById('time-format-select').value = this.settings.timeFormat;
         document.getElementById('date-format-select').value = this.settings.dateFormat;
+        document.getElementById('time-separator-select').value = this.settings.timeSeparator;
+        document.getElementById('accent-color').value = this.settings.accentColor || '';
         
         if (this.settings.displayName) {
             document.getElementById('display-name').value = this.settings.displayName;
+        }
+        
+        this.updateUserDisplayName();
+        this.applyAccentColor();
+    }
+
+    updateUserDisplayName() {
+        const displayNameEl = document.getElementById('user-display-name');
+        if (displayNameEl) {
+            const displayName = this.settings.displayName || (this.currentUser ? this.currentUser.username : '');
+            displayNameEl.textContent = displayName;
         }
     }
 
@@ -379,12 +402,39 @@ class TimelineApp {
 
     renderTimeline() {
         const container = document.getElementById('events-container');
+        const emptyState = document.getElementById('empty-state');
+        const timelineLine = document.querySelector('.timeline-line');
+        
         container.innerHTML = '';
+        
+        // Check if there are any events to display
+        if (this.filteredEvents.length === 0) {
+            // Show empty state, hide timeline elements
+            emptyState.style.display = 'flex';
+            timelineLine.style.display = 'none';
+            return;
+        }
+        
+        // Hide empty state, show timeline elements
+        emptyState.style.display = 'none';
+        timelineLine.style.display = 'block';
         
         // Sort events by timestamp (oldest first as per requirements)
         const sortedEvents = [...this.filteredEvents].sort((a, b) => a.timestamp - b.timestamp);
         
+        let lastSeparatorDate = null;
+        
         sortedEvents.forEach(event => {
+            // Check if we need to add a separator before this event
+            if (this.settings.timeSeparator !== 'disabled') {
+                const separatorDate = this.getSeparatorDate(event.timestamp, lastSeparatorDate);
+                if (separatorDate) {
+                    const separatorElement = this.createTimeSeparatorElement(separatorDate);
+                    container.appendChild(separatorElement);
+                    lastSeparatorDate = separatorDate;
+                }
+            }
+            
             const eventElement = this.createEventElement(event);
             container.appendChild(eventElement);
         });
@@ -462,6 +512,85 @@ class TimelineApp {
             const timer = this.calculateTimer(new Date(timestamp));
             timerEl.innerHTML = timer;
         });
+    }
+
+    getSeparatorDate(eventTimestamp, lastSeparatorDate) {
+        const eventDate = new Date(eventTimestamp);
+        
+        switch (this.settings.timeSeparator) {
+            case 'daily':
+                const dayKey = eventDate.toDateString();
+                const lastDayKey = lastSeparatorDate ? lastSeparatorDate.toDateString() : null;
+                if (dayKey !== lastDayKey) {
+                    return new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate());
+                }
+                break;
+                
+            case 'weekly':
+                const weekStart = this.getWeekStart(eventDate);
+                if (!lastSeparatorDate || weekStart.getTime() !== lastSeparatorDate.getTime()) {
+                    return weekStart;
+                }
+                break;
+                
+            case 'monthly':
+                const monthStart = new Date(eventDate.getFullYear(), eventDate.getMonth(), 1);
+                if (!lastSeparatorDate || monthStart.getTime() !== lastSeparatorDate.getTime()) {
+                    return monthStart;
+                }
+                break;
+                
+            case 'yearly':
+                const yearStart = new Date(eventDate.getFullYear(), 0, 1);
+                if (!lastSeparatorDate || yearStart.getTime() !== lastSeparatorDate.getTime()) {
+                    return yearStart;
+                }
+                break;
+        }
+        
+        return null;
+    }
+
+    getWeekStart(date) {
+        const d = new Date(date);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
+        return new Date(d.setDate(diff));
+    }
+
+    createTimeSeparatorElement(separatorDate) {
+        const separatorDiv = document.createElement('div');
+        separatorDiv.className = 'timeline-separator';
+        
+        const formattedDate = this.formatSeparatorDate(separatorDate);
+        
+        separatorDiv.innerHTML = `
+            <div class="separator-line"></div>
+            <div class="separator-date">${formattedDate}</div>
+        `;
+        
+        return separatorDiv;
+    }
+
+    formatSeparatorDate(date) {
+        const dateFormat = this.settings.dateFormat;
+        
+        switch (dateFormat) {
+            case 'dd/mm/yyyy':
+                return date.toLocaleDateString('en-GB');
+            case 'mm/dd/yyyy':
+                return date.toLocaleDateString('en-US');
+            case 'yyyy-mm-dd':
+                return date.toISOString().split('T')[0];
+            case 'dd mmm yyyy':
+                return date.toLocaleDateString('en-GB', {
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric'
+                });
+            default:
+                return date.toLocaleDateString('en-GB');
+        }
     }
 
     formatDateTime(date) {
@@ -834,6 +963,7 @@ class TimelineApp {
         const displayName = document.getElementById('display-name').value;
         this.settings.displayName = displayName;
         await this.saveSettingsToServer();
+        this.updateUserDisplayName();
     }
 
     async changePassword() {
@@ -872,6 +1002,7 @@ class TimelineApp {
                     tags: event.tags
                 })),
                 settings: this.settings,
+                notes: this.notes,
                 exported_at: new Date().toISOString()
             };
             
@@ -942,7 +1073,13 @@ class TimelineApp {
                 await this.saveSettingsToServer();
             }
             
-            // Step 7: Clear the temporary backup data from memory
+            // Step 7: Re-save notes with new encryption
+            if (backupData.notes !== undefined) {
+                this.notes = backupData.notes;
+                await this.saveNotes();
+            }
+            
+            // Step 8: Clear the temporary backup data from memory
             // (JavaScript garbage collector will handle this)
             
             // Reload data to reflect changes
@@ -985,6 +1122,42 @@ class TimelineApp {
         this.renderTimeline(); // Re-render to apply new format
     }
 
+    async saveTimeSeparator() {
+        const timeSeparator = document.getElementById('time-separator-select').value;
+        this.settings.timeSeparator = timeSeparator;
+        await this.saveSettingsToServer();
+        this.renderTimeline(); // Re-render to apply new separators
+    }
+
+    async saveAccentColor() {
+        const accentColor = document.getElementById('accent-color').value.trim();
+        
+        // If field is empty, use default color
+        if (accentColor === '') {
+            this.settings.accentColor = '#710193';
+            this.applyAccentColor();
+            await this.saveSettingsToServer();
+            return;
+        }
+        
+        // Validate hex color format for non-empty values
+        const hexColorRegex = /^#[0-9A-Fa-f]{6}$/;
+        if (!hexColorRegex.test(accentColor)) {
+            // Reset field to current valid value instead of showing alert
+            document.getElementById('accent-color').value = this.settings.accentColor;
+            return;
+        }
+        
+        this.settings.accentColor = accentColor;
+        this.applyAccentColor();
+        await this.saveSettingsToServer();
+    }
+
+    applyAccentColor() {
+        const color = this.settings.accentColor || '#710193';
+        document.documentElement.style.setProperty('--accent-color', color);
+    }
+
     async saveSettingsToServer() {
         try {
             const settingsEncrypted = await cryptoUtils.encrypt(JSON.stringify(this.settings), this.userPassword);
@@ -1011,6 +1184,130 @@ class TimelineApp {
         } catch (error) {
             this.showError('Network Error', 'Network error. Please try again.');
         }
+    }
+
+    // Notes functions
+    async loadNotes() {
+        try {
+            const response = await fetch('/api/notes', {
+                credentials: 'include'
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data.content_encrypted) {
+                    try {
+                        this.notes = await cryptoUtils.decrypt(data.content_encrypted, this.userPassword);
+                    } catch (error) {
+                        console.error('Failed to decrypt notes:', error);
+                        this.notes = '';
+                    }
+                } else {
+                    this.notes = '';
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load notes:', error);
+            this.notes = '';
+        }
+    }
+
+    async saveNotes() {
+        try {
+            this.updateNotesStatus('saving');
+            const notesEncrypted = await cryptoUtils.encrypt(this.notes, this.userPassword);
+            
+            const response = await fetch('/api/notes', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    content_encrypted: notesEncrypted
+                }),
+                credentials: 'include'
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                this.updateNotesStatus('saved');
+            } else {
+                this.updateNotesStatus('unsaved');
+                console.error('Failed to save notes');
+            }
+        } catch (error) {
+            this.updateNotesStatus('unsaved');
+            console.error('Failed to save notes:', error);
+        }
+    }
+
+    updateNotesStatus(status) {
+        const statusElement = document.getElementById('notes-status-text');
+        if (!statusElement) return;
+        
+        switch (status) {
+            case 'unsaved':
+                statusElement.textContent = 'Your notes are unsaved!';
+                statusElement.style.color = 'var(--error-color)';
+                break;
+            case 'saving':
+                statusElement.textContent = 'Saving notes...';
+                statusElement.style.color = 'var(--text-secondary)';
+                break;
+            case 'saved':
+                statusElement.textContent = 'Your notes are saved.';
+                statusElement.style.color = 'var(--success-color)';
+                break;
+        }
+    }
+
+    showNotesOverlay() {
+        // Load current notes into textarea
+        document.getElementById('notes-textarea').value = this.notes;
+        this.showOverlay('notes-overlay');
+        
+        // Set initial status
+        this.updateNotesStatus('saved');
+        
+        // Setup autosave
+        this.setupNotesAutosave();
+    }
+
+    setupNotesAutosave() {
+        const textarea = document.getElementById('notes-textarea');
+        
+        // Clear existing timer
+        if (this.notesAutosaveTimer) {
+            clearTimeout(this.notesAutosaveTimer);
+        }
+        
+        // Remove existing event listener to avoid duplicates
+        textarea.removeEventListener('input', this.handleNotesInput);
+        
+        // Bind the handler to maintain context
+        this.handleNotesInput = this.handleNotesInput.bind(this);
+        
+        // Add event listener for input changes
+        textarea.addEventListener('input', this.handleNotesInput);
+    }
+
+    handleNotesInput() {
+        // Update local notes
+        this.notes = document.getElementById('notes-textarea').value;
+        
+        // Show unsaved status immediately
+        this.updateNotesStatus('unsaved');
+        
+        // Clear existing timer
+        if (this.notesAutosaveTimer) {
+            clearTimeout(this.notesAutosaveTimer);
+        }
+        
+        // Set timer to save after 1 second of no input
+        this.notesAutosaveTimer = setTimeout(() => {
+            this.saveNotes();
+        }, 1000);
     }
 
     // Backup functions

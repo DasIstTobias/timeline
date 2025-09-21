@@ -26,3 +26,11 @@ pub struct Tag {
     pub user_id: Uuid,
     pub name_encrypted: String,
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct Note {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub content_encrypted: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}

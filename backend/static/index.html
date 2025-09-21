@@ -64,10 +64,16 @@
     <div id="user-screen" class="screen" style="display: none;">
         <!-- Top Bar -->
         <div class="top-bar">
-            <div class="event-count">
-                <span id="total-event-count">0 Events in the list</span>
+            <div class="top-bar-left">
+                <button id="notes-btn" class="notes-button">Notes</button>
+                <div class="event-count">
+                    <span id="total-event-count">0 Events in the list</span>
+                </div>
             </div>
-            <div class="burger-menu">
+            <div class="top-bar-center">
+                <span id="user-display-name"></span>
+            </div>
+            <div class="top-bar-right">
                 <button id="burger-btn" class="burger-button">
                     <span></span>
                     <span></span>
@@ -86,6 +92,14 @@
             <div class="timeline-container" id="timeline-container">
                 <div class="timeline-line"></div>
                 <div id="events-container" class="events-container"></div>
+                
+                <!-- Empty State -->
+                <div id="empty-state" class="empty-state" style="display: none;">
+                    <div class="empty-state-content">
+                        <button id="empty-add-events-btn" class="add-event-button">Add Events</button>
+                        <span class="empty-state-text"> to view the timeline</span>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -187,6 +201,28 @@
                         <button id="save-date-format" class="save-btn">Save</button>
                     </div>
                 </div>
+                
+                <div class="settings-section">
+                    <h3>Time Separators</h3>
+                    <div class="form-group">
+                        <select id="time-separator-select">
+                            <option value="disabled">Disabled</option>
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="monthly">Monthly</option>
+                            <option value="yearly">Yearly</option>
+                        </select>
+                        <button id="save-time-separator" class="save-btn">Save</button>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>Accent Colour</h3>
+                    <div class="form-group">
+                        <input type="text" id="accent-color" placeholder="#710193" pattern="^#[0-9A-Fa-f]{6}$">
+                        <button id="save-accent-color" class="save-btn">Save</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -212,6 +248,23 @@
                     <input type="file" id="import-file" accept=".json" style="display: none;">
                     <button id="import-btn" class="backup-btn">Import Events</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notes Overlay -->
+    <div id="notes-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content notes-content">
+            <div class="overlay-header">
+                <h2>Notes</h2>
+                <button class="close-overlay" id="close-notes">&times;</button>
+            </div>
+            
+            <div class="notes-section">
+                <div class="notes-status">
+                    <small id="notes-status-text">Your notes are saved.</small>
+                </div>
+                <textarea id="notes-textarea" placeholder="Write your notes here..."></textarea>
             </div>
         </div>
     </div>
