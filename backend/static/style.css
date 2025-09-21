@@ -383,6 +383,27 @@ button:hover {
     margin-left: 80px;
 }
 
+/* Empty State */
+.empty-state {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 400px;
+    flex-direction: column;
+}
+
+.empty-state-content {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.empty-state-text {
+    font-size: 1.1rem;
+    color: var(--text-primary);
+    font-weight: 400;
+}
+
 .event-item {
     position: relative;
     margin-bottom: 2rem;

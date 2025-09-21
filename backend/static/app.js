@@ -46,6 +46,7 @@ class TimelineApp {
         document.getElementById('settings-btn').addEventListener('click', () => this.showSettingsOverlay());
         document.getElementById('backup-btn').addEventListener('click', () => this.showBackupOverlay());
         document.getElementById('add-event-btn').addEventListener('click', () => this.showAddEventOverlay());
+        document.getElementById('empty-add-events-btn').addEventListener('click', () => this.showAddEventOverlay());
         
         // Search and filter
         document.getElementById('search-btn').addEventListener('click', () => this.performSearch());
@@ -401,7 +402,22 @@ class TimelineApp {
 
     renderTimeline() {
         const container = document.getElementById('events-container');
+        const emptyState = document.getElementById('empty-state');
+        const timelineLine = document.querySelector('.timeline-line');
+        
         container.innerHTML = '';
+        
+        // Check if there are any events to display
+        if (this.filteredEvents.length === 0) {
+            // Show empty state, hide timeline elements
+            emptyState.style.display = 'flex';
+            timelineLine.style.display = 'none';
+            return;
+        }
+        
+        // Hide empty state, show timeline elements
+        emptyState.style.display = 'none';
+        timelineLine.style.display = 'block';
         
         // Sort events by timestamp (oldest first as per requirements)
         const sortedEvents = [...this.filteredEvents].sort((a, b) => a.timestamp - b.timestamp);
