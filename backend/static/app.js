@@ -1188,6 +1188,7 @@ class TimelineApp {
 
     async saveNotes() {
         try {
+            this.updateNotesStatus('saving');
             const notesEncrypted = await cryptoUtils.encrypt(this.notes, this.userPassword);
             
             const response = await fetch('/api/notes', {
@@ -1203,11 +1204,35 @@ class TimelineApp {
             
             const data = await response.json();
             
-            if (!data.success) {
+            if (data.success) {
+                this.updateNotesStatus('saved');
+            } else {
+                this.updateNotesStatus('unsaved');
                 console.error('Failed to save notes');
             }
         } catch (error) {
+            this.updateNotesStatus('unsaved');
             console.error('Failed to save notes:', error);
+        }
+    }
+
+    updateNotesStatus(status) {
+        const statusElement = document.getElementById('notes-status-text');
+        if (!statusElement) return;
+        
+        switch (status) {
+            case 'unsaved':
+                statusElement.textContent = 'Your notes are unsaved!';
+                statusElement.style.color = 'var(--error-color)';
+                break;
+            case 'saving':
+                statusElement.textContent = 'Saving notes...';
+                statusElement.style.color = 'var(--text-secondary)';
+                break;
+            case 'saved':
+                statusElement.textContent = 'Your notes are saved.';
+                statusElement.style.color = 'var(--success-color)';
+                break;
         }
     }
 
@@ -1215,6 +1240,9 @@ class TimelineApp {
         // Load current notes into textarea
         document.getElementById('notes-textarea').value = this.notes;
         this.showOverlay('notes-overlay');
+        
+        // Set initial status
+        this.updateNotesStatus('saved');
         
         // Setup autosave
         this.setupNotesAutosave();
@@ -1241,6 +1269,9 @@ class TimelineApp {
     handleNotesInput() {
         // Update local notes
         this.notes = document.getElementById('notes-textarea').value;
+        
+        // Show unsaved status immediately
+        this.updateNotesStatus('unsaved');
         
         // Clear existing timer
         if (this.notesAutosaveTimer) {

@@ -64,16 +64,14 @@
     <div id="user-screen" class="screen" style="display: none;">
         <!-- Top Bar -->
         <div class="top-bar">
-            <div class="notes-section">
+            <div class="top-bar-left">
                 <button id="notes-btn" class="notes-button">Notes</button>
-            </div>
-            <div class="event-count">
                 <span id="total-event-count">0 Events in the list</span>
             </div>
-            <div class="user-display">
+            <div class="top-bar-center">
                 <span id="user-display-name"></span>
             </div>
-            <div class="burger-menu">
+            <div class="top-bar-right">
                 <button id="burger-btn" class="burger-button">
                     <span></span>
                     <span></span>
@@ -253,10 +251,10 @@
             </div>
             
             <div class="notes-section">
-                <textarea id="notes-textarea" placeholder="Write your notes here..." rows="20"></textarea>
-                <div class="notes-info">
-                    <small>Your notes are automatically saved and encrypted.</small>
+                <div class="notes-status">
+                    <small id="notes-status-text">Your notes are saved.</small>
                 </div>
+                <textarea id="notes-textarea" placeholder="Write your notes here..."></textarea>
             </div>
         </div>
     </div>
