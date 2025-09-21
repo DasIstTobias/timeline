@@ -365,7 +365,7 @@ class TimelineApp {
         document.getElementById('time-format-select').value = this.settings.timeFormat;
         document.getElementById('date-format-select').value = this.settings.dateFormat;
         document.getElementById('time-separator-select').value = this.settings.timeSeparator;
-        document.getElementById('accent-color').value = this.settings.accentColor;
+        document.getElementById('accent-color').value = this.settings.accentColor || '';
         
         if (this.settings.displayName) {
             document.getElementById('display-name').value = this.settings.displayName;
@@ -1130,12 +1130,21 @@ class TimelineApp {
     }
 
     async saveAccentColor() {
-        const accentColor = document.getElementById('accent-color').value;
+        const accentColor = document.getElementById('accent-color').value.trim();
         
-        // Validate hex color format
+        // If field is empty, use default color
+        if (accentColor === '') {
+            this.settings.accentColor = '#710193';
+            this.applyAccentColor();
+            await this.saveSettingsToServer();
+            return;
+        }
+        
+        // Validate hex color format for non-empty values
         const hexColorRegex = /^#[0-9A-Fa-f]{6}$/;
         if (!hexColorRegex.test(accentColor)) {
-            alert('Please enter a valid hex colour code (e.g., #710193)');
+            // Reset field to current valid value instead of showing alert
+            document.getElementById('accent-color').value = this.settings.accentColor;
             return;
         }
         
@@ -1145,7 +1154,8 @@ class TimelineApp {
     }
 
     applyAccentColor() {
-        document.documentElement.style.setProperty('--accent-color', this.settings.accentColor);
+        const color = this.settings.accentColor || '#710193';
+        document.documentElement.style.setProperty('--accent-color', color);
     }
 
     async saveSettingsToServer() {
