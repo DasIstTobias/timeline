@@ -253,6 +253,14 @@ button:hover {
     opacity: 0.9;
 }
 
+.event-count {
+    padding: 0.5rem 1rem;
+    background-color: var(--primary-bg);
+    border: 2px solid var(--border-color);
+    border-radius: 20px;
+    font-size: 0.9rem;
+}
+
 .bottom-bar {
     border-top: 2px solid var(--border-color);
     border-bottom: none;
@@ -291,6 +299,16 @@ button:hover {
     align-items: center;
     cursor: pointer;
     padding: 0;
+    border-radius: 6px;
+    transition: background-color 0.3s;
+}
+
+.burger-button:hover {
+    background-color: var(--accent-color);
+}
+
+.burger-button:hover span {
+    background-color: white;
 }
 
 .burger-button span {
