@@ -6,6 +6,7 @@ class TimelineApp {
         this.events = [];
         this.tags = [];
         this.filteredEvents = [];
+        this.notes = '';
         this.settings = {
             theme: 'device',
             timeFormat: '24h',
@@ -15,6 +16,7 @@ class TimelineApp {
             accentColor: '#710193'
         };
         this.eventTimers = new Map();
+        this.notesAutosaveTimer = null;
         
         this.init();
     }
@@ -40,6 +42,7 @@ class TimelineApp {
         // User functions
         document.getElementById('user-logout-btn').addEventListener('click', () => this.logout());
         document.getElementById('burger-btn').addEventListener('click', () => this.toggleBurgerMenu());
+        document.getElementById('notes-btn').addEventListener('click', () => this.showNotesOverlay());
         document.getElementById('settings-btn').addEventListener('click', () => this.showSettingsOverlay());
         document.getElementById('backup-btn').addEventListener('click', () => this.showBackupOverlay());
         document.getElementById('add-event-btn').addEventListener('click', () => this.showAddEventOverlay());
@@ -257,7 +260,8 @@ class TimelineApp {
         await Promise.all([
             this.loadEvents(),
             this.loadTags(),
-            this.loadSettings()
+            this.loadSettings(),
+            this.loadNotes()
         ]);
     }
 
@@ -982,6 +986,7 @@ class TimelineApp {
                     tags: event.tags
                 })),
                 settings: this.settings,
+                notes: this.notes,
                 exported_at: new Date().toISOString()
             };
             
@@ -1052,7 +1057,13 @@ class TimelineApp {
                 await this.saveSettingsToServer();
             }
             
-            // Step 7: Clear the temporary backup data from memory
+            // Step 7: Re-save notes with new encryption
+            if (backupData.notes !== undefined) {
+                this.notes = backupData.notes;
+                await this.saveNotes();
+            }
+            
+            // Step 8: Clear the temporary backup data from memory
             // (JavaScript garbage collector will handle this)
             
             // Reload data to reflect changes
@@ -1147,6 +1158,99 @@ class TimelineApp {
         } catch (error) {
             this.showError('Network Error', 'Network error. Please try again.');
         }
+    }
+
+    // Notes functions
+    async loadNotes() {
+        try {
+            const response = await fetch('/api/notes', {
+                credentials: 'include'
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data.content_encrypted) {
+                    try {
+                        this.notes = await cryptoUtils.decrypt(data.content_encrypted, this.userPassword);
+                    } catch (error) {
+                        console.error('Failed to decrypt notes:', error);
+                        this.notes = '';
+                    }
+                } else {
+                    this.notes = '';
+                }
+            }
+        } catch (error) {
+            console.error('Failed to load notes:', error);
+            this.notes = '';
+        }
+    }
+
+    async saveNotes() {
+        try {
+            const notesEncrypted = await cryptoUtils.encrypt(this.notes, this.userPassword);
+            
+            const response = await fetch('/api/notes', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    content_encrypted: notesEncrypted
+                }),
+                credentials: 'include'
+            });
+            
+            const data = await response.json();
+            
+            if (!data.success) {
+                console.error('Failed to save notes');
+            }
+        } catch (error) {
+            console.error('Failed to save notes:', error);
+        }
+    }
+
+    showNotesOverlay() {
+        // Load current notes into textarea
+        document.getElementById('notes-textarea').value = this.notes;
+        this.showOverlay('notes-overlay');
+        
+        // Setup autosave
+        this.setupNotesAutosave();
+    }
+
+    setupNotesAutosave() {
+        const textarea = document.getElementById('notes-textarea');
+        
+        // Clear existing timer
+        if (this.notesAutosaveTimer) {
+            clearTimeout(this.notesAutosaveTimer);
+        }
+        
+        // Remove existing event listener to avoid duplicates
+        textarea.removeEventListener('input', this.handleNotesInput);
+        
+        // Bind the handler to maintain context
+        this.handleNotesInput = this.handleNotesInput.bind(this);
+        
+        // Add event listener for input changes
+        textarea.addEventListener('input', this.handleNotesInput);
+    }
+
+    handleNotesInput() {
+        // Update local notes
+        this.notes = document.getElementById('notes-textarea').value;
+        
+        // Clear existing timer
+        if (this.notesAutosaveTimer) {
+            clearTimeout(this.notesAutosaveTimer);
+        }
+        
+        // Set timer to save after 1 second of no input
+        this.notesAutosaveTimer = setTimeout(() => {
+            this.saveNotes();
+        }, 1000);
     }
 
     // Backup functions

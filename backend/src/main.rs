@@ -71,6 +71,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/tags", get(get_tags))
         .route("/api/settings", get(get_settings))
         .route("/api/settings", post(save_settings))
+        .route("/api/notes", get(get_notes))
+        .route("/api/notes", post(save_notes))
         .nest_service("/static", ServeDir::new("static"))
         .layer(CorsLayer::permissive())
         .with_state(app_state);
@@ -580,6 +582,71 @@ async fn save_settings(
         .bind(&req.settings_encrypted)
         .bind(&req.display_name_encrypted)
         .bind(auth_state.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+async fn get_notes(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Get or create notes for user
+    let notes: Option<String> = sqlx::query_scalar(
+        "SELECT content_encrypted FROM notes WHERE user_id = $1"
+    )
+        .bind(auth_state.user_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // If no notes exist, create empty notes
+    if notes.is_none() {
+        sqlx::query("INSERT INTO notes (user_id, content_encrypted) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING")
+            .bind(auth_state.user_id)
+            .bind("")
+            .execute(&state.db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    
+    Ok(Json(serde_json::json!({
+        "content_encrypted": notes.unwrap_or_default()
+    })))
+}
+
+#[derive(Deserialize)]
+struct SaveNotesRequest {
+    content_encrypted: String,
+}
+
+async fn save_notes(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<SaveNotesRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    sqlx::query(
+        "INSERT INTO notes (user_id, content_encrypted, updated_at) VALUES ($1, $2, NOW()) 
+         ON CONFLICT (user_id) DO UPDATE SET content_encrypted = $2, updated_at = NOW()"
+    )
+        .bind(auth_state.user_id)
+        .bind(&req.content_encrypted)
         .execute(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

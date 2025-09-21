@@ -222,6 +222,26 @@ button:hover {
     font-size: 1rem;
 }
 
+.notes-section {
+    display: flex;
+    align-items: center;
+}
+
+.notes-button {
+    padding: 0.5rem 1rem;
+    background-color: var(--accent-color);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: opacity 0.3s;
+}
+
+.notes-button:hover {
+    opacity: 0.9;
+}
+
 .bottom-bar {
     border-top: 2px solid var(--border-color);
     border-bottom: none;
@@ -606,6 +626,42 @@ button:hover {
     color: var(--text-primary);
     background-color: var(--hover-bg);
     border-radius: 50%;
+}
+
+/* Notes Overlay */
+.notes-content {
+    max-width: 80%;
+    max-height: 90%;
+    width: 800px;
+}
+
+.notes-section {
+    padding: 2rem;
+}
+
+#notes-textarea {
+    width: 100%;
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1rem;
+    font-family: inherit;
+    font-size: 1rem;
+    line-height: 1.5;
+    background-color: var(--primary-bg);
+    color: var(--text-primary);
+    resize: vertical;
+    min-height: 400px;
+}
+
+#notes-textarea:focus {
+    outline: none;
+    border-color: var(--accent-color);
+}
+
+.notes-info {
+    margin-top: 1rem;
+    color: var(--text-secondary);
+    text-align: center;
 }
 
 /* Settings Overlay */

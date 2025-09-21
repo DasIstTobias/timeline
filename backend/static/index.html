@@ -64,6 +64,9 @@
     <div id="user-screen" class="screen" style="display: none;">
         <!-- Top Bar -->
         <div class="top-bar">
+            <div class="notes-section">
+                <button id="notes-btn" class="notes-button">Notes</button>
+            </div>
             <div class="event-count">
                 <span id="total-event-count">0 Events in the list</span>
             </div>
@@ -236,6 +239,23 @@
                     <p>Upload a JSON file to add events</p>
                     <input type="file" id="import-file" accept=".json" style="display: none;">
                     <button id="import-btn" class="backup-btn">Import Events</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notes Overlay -->
+    <div id="notes-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content notes-content">
+            <div class="overlay-header">
+                <h2>Notes</h2>
+                <button class="close-overlay" id="close-notes">&times;</button>
+            </div>
+            
+            <div class="notes-section">
+                <textarea id="notes-textarea" placeholder="Write your notes here..." rows="20"></textarea>
+                <div class="notes-info">
+                    <small>Your notes are automatically saved and encrypted.</small>
                 </div>
             </div>
         </div>
