@@ -341,7 +341,7 @@ button:hover {
 .event-item::before {
     content: '';
     position: absolute;
-    left: -54px;
+    left: -72px;
     top: 1.5rem;
     width: 16px;
     height: 16px;
@@ -535,8 +535,8 @@ button:hover {
 .overlay-content {
     background-color: var(--primary-bg);
     border-radius: 12px;
-    max-width: 600px;
-    max-height: 80vh;
+    max-width: 70%;
+    max-height: 80%;
     width: 90%;
     overflow-y: auto;
     box-shadow: 0 8px 16px rgba(0,0,0,0.2);
@@ -813,12 +813,12 @@ button:hover {
 
 .create-event-btn {
     width: 100%;
-    background-color: var(--success-color);
+    background-color: #1f4e79;
     margin-top: 1rem;
 }
 
 .create-event-btn:hover {
-    background-color: #218838;
+    background-color: #174063;
 }
 
 /* Delete Confirmation */
@@ -948,7 +948,7 @@ button:hover {
     }
     
     .event-item::before {
-        left: -44px;
+        left: -52px;
     }
     
     .overlay-content {
