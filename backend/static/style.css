@@ -216,6 +216,12 @@ button:hover {
     min-height: 80px;
 }
 
+.user-display {
+    font-weight: 500;
+    color: var(--text-primary);
+    font-size: 1rem;
+}
+
 .bottom-bar {
     border-top: 2px solid var(--border-color);
     border-bottom: none;
@@ -420,6 +426,31 @@ button:hover {
     background-color: #6c757d;
     padding: 0.5rem 1rem;
     font-size: 0.85rem;
+}
+
+/* Timeline Separators */
+.timeline-separator {
+    position: relative;
+    margin: 2rem 0;
+    display: flex;
+    align-items: center;
+}
+
+.separator-line {
+    flex: 1;
+    height: 2px;
+    background-color: #999;
+    margin-right: 1rem;
+}
+
+.separator-date {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+    white-space: nowrap;
+    background-color: var(--primary-bg);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
 }
 
 .delete-event-btn:hover {

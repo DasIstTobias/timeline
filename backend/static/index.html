@@ -67,6 +67,9 @@
             <div class="event-count">
                 <span id="total-event-count">0 Events in the list</span>
             </div>
+            <div class="user-display">
+                <span id="user-display-name"></span>
+            </div>
             <div class="burger-menu">
                 <button id="burger-btn" class="burger-button">
                     <span></span>
@@ -185,6 +188,20 @@
                             <option value="dd mmm yyyy">1 January 2000</option>
                         </select>
                         <button id="save-date-format" class="save-btn">Save</button>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>Time Separators</h3>
+                    <div class="form-group">
+                        <select id="time-separator-select">
+                            <option value="disabled">Disabled</option>
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="monthly">Monthly</option>
+                            <option value="yearly">Yearly</option>
+                        </select>
+                        <button id="save-time-separator" class="save-btn">Save</button>
                     </div>
                 </div>
             </div>

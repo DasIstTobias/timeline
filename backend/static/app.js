@@ -10,7 +10,8 @@ class TimelineApp {
             theme: 'device',
             timeFormat: '24h',
             dateFormat: 'dd/mm/yyyy',
-            displayName: ''
+            displayName: '',
+            timeSeparator: 'weekly'
         };
         this.eventTimers = new Map();
         
@@ -60,6 +61,7 @@ class TimelineApp {
         document.getElementById('save-theme').addEventListener('click', () => this.saveTheme());
         document.getElementById('save-time-format').addEventListener('click', () => this.saveTimeFormat());
         document.getElementById('save-date-format').addEventListener('click', () => this.saveDateFormat());
+        document.getElementById('save-time-separator').addEventListener('click', () => this.saveTimeSeparator());
         
         // Password change overlays
         document.getElementById('confirm-password-change').addEventListener('click', () => this.confirmPasswordChange());
@@ -183,6 +185,7 @@ class TimelineApp {
         }
         
         await this.loadUserData();
+        this.updateUserDisplayName();
         this.renderTimeline();
         this.updateEventCounts();
     }
@@ -354,9 +357,20 @@ class TimelineApp {
         // Apply other settings
         document.getElementById('time-format-select').value = this.settings.timeFormat;
         document.getElementById('date-format-select').value = this.settings.dateFormat;
+        document.getElementById('time-separator-select').value = this.settings.timeSeparator;
         
         if (this.settings.displayName) {
             document.getElementById('display-name').value = this.settings.displayName;
+        }
+        
+        this.updateUserDisplayName();
+    }
+
+    updateUserDisplayName() {
+        const displayNameEl = document.getElementById('user-display-name');
+        if (displayNameEl) {
+            const displayName = this.settings.displayName || (this.currentUser ? this.currentUser.username : '');
+            displayNameEl.textContent = displayName;
         }
     }
 
@@ -384,7 +398,19 @@ class TimelineApp {
         // Sort events by timestamp (oldest first as per requirements)
         const sortedEvents = [...this.filteredEvents].sort((a, b) => a.timestamp - b.timestamp);
         
+        let lastSeparatorDate = null;
+        
         sortedEvents.forEach(event => {
+            // Check if we need to add a separator before this event
+            if (this.settings.timeSeparator !== 'disabled') {
+                const separatorDate = this.getSeparatorDate(event.timestamp, lastSeparatorDate);
+                if (separatorDate) {
+                    const separatorElement = this.createTimeSeparatorElement(separatorDate);
+                    container.appendChild(separatorElement);
+                    lastSeparatorDate = separatorDate;
+                }
+            }
+            
             const eventElement = this.createEventElement(event);
             container.appendChild(eventElement);
         });
@@ -462,6 +488,85 @@ class TimelineApp {
             const timer = this.calculateTimer(new Date(timestamp));
             timerEl.innerHTML = timer;
         });
+    }
+
+    getSeparatorDate(eventTimestamp, lastSeparatorDate) {
+        const eventDate = new Date(eventTimestamp);
+        
+        switch (this.settings.timeSeparator) {
+            case 'daily':
+                const dayKey = eventDate.toDateString();
+                const lastDayKey = lastSeparatorDate ? lastSeparatorDate.toDateString() : null;
+                if (dayKey !== lastDayKey) {
+                    return new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate());
+                }
+                break;
+                
+            case 'weekly':
+                const weekStart = this.getWeekStart(eventDate);
+                if (!lastSeparatorDate || weekStart.getTime() !== lastSeparatorDate.getTime()) {
+                    return weekStart;
+                }
+                break;
+                
+            case 'monthly':
+                const monthStart = new Date(eventDate.getFullYear(), eventDate.getMonth(), 1);
+                if (!lastSeparatorDate || monthStart.getTime() !== lastSeparatorDate.getTime()) {
+                    return monthStart;
+                }
+                break;
+                
+            case 'yearly':
+                const yearStart = new Date(eventDate.getFullYear(), 0, 1);
+                if (!lastSeparatorDate || yearStart.getTime() !== lastSeparatorDate.getTime()) {
+                    return yearStart;
+                }
+                break;
+        }
+        
+        return null;
+    }
+
+    getWeekStart(date) {
+        const d = new Date(date);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
+        return new Date(d.setDate(diff));
+    }
+
+    createTimeSeparatorElement(separatorDate) {
+        const separatorDiv = document.createElement('div');
+        separatorDiv.className = 'timeline-separator';
+        
+        const formattedDate = this.formatSeparatorDate(separatorDate);
+        
+        separatorDiv.innerHTML = `
+            <div class="separator-line"></div>
+            <div class="separator-date">${formattedDate}</div>
+        `;
+        
+        return separatorDiv;
+    }
+
+    formatSeparatorDate(date) {
+        const dateFormat = this.settings.dateFormat;
+        
+        switch (dateFormat) {
+            case 'dd/mm/yyyy':
+                return date.toLocaleDateString('en-GB');
+            case 'mm/dd/yyyy':
+                return date.toLocaleDateString('en-US');
+            case 'yyyy-mm-dd':
+                return date.toISOString().split('T')[0];
+            case 'dd mmm yyyy':
+                return date.toLocaleDateString('en-GB', {
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric'
+                });
+            default:
+                return date.toLocaleDateString('en-GB');
+        }
     }
 
     formatDateTime(date) {
@@ -834,6 +939,7 @@ class TimelineApp {
         const displayName = document.getElementById('display-name').value;
         this.settings.displayName = displayName;
         await this.saveSettingsToServer();
+        this.updateUserDisplayName();
     }
 
     async changePassword() {
@@ -983,6 +1089,13 @@ class TimelineApp {
         this.settings.dateFormat = dateFormat;
         await this.saveSettingsToServer();
         this.renderTimeline(); // Re-render to apply new format
+    }
+
+    async saveTimeSeparator() {
+        const timeSeparator = document.getElementById('time-separator-select').value;
+        this.settings.timeSeparator = timeSeparator;
+        await this.saveSettingsToServer();
+        this.renderTimeline(); // Re-render to apply new separators
     }
 
     async saveSettingsToServer() {
