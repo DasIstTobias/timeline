@@ -11,7 +11,8 @@ class TimelineApp {
             timeFormat: '24h',
             dateFormat: 'dd/mm/yyyy',
             displayName: '',
-            timeSeparator: 'weekly'
+            timeSeparator: 'weekly',
+            accentColor: '#710193'
         };
         this.eventTimers = new Map();
         
@@ -62,6 +63,7 @@ class TimelineApp {
         document.getElementById('save-time-format').addEventListener('click', () => this.saveTimeFormat());
         document.getElementById('save-date-format').addEventListener('click', () => this.saveDateFormat());
         document.getElementById('save-time-separator').addEventListener('click', () => this.saveTimeSeparator());
+        document.getElementById('save-accent-color').addEventListener('click', () => this.saveAccentColor());
         
         // Password change overlays
         document.getElementById('confirm-password-change').addEventListener('click', () => this.confirmPasswordChange());
@@ -358,12 +360,14 @@ class TimelineApp {
         document.getElementById('time-format-select').value = this.settings.timeFormat;
         document.getElementById('date-format-select').value = this.settings.dateFormat;
         document.getElementById('time-separator-select').value = this.settings.timeSeparator;
+        document.getElementById('accent-color').value = this.settings.accentColor;
         
         if (this.settings.displayName) {
             document.getElementById('display-name').value = this.settings.displayName;
         }
         
         this.updateUserDisplayName();
+        this.applyAccentColor();
     }
 
     updateUserDisplayName() {
@@ -1096,6 +1100,25 @@ class TimelineApp {
         this.settings.timeSeparator = timeSeparator;
         await this.saveSettingsToServer();
         this.renderTimeline(); // Re-render to apply new separators
+    }
+
+    async saveAccentColor() {
+        const accentColor = document.getElementById('accent-color').value;
+        
+        // Validate hex color format
+        const hexColorRegex = /^#[0-9A-Fa-f]{6}$/;
+        if (!hexColorRegex.test(accentColor)) {
+            alert('Please enter a valid hex colour code (e.g., #710193)');
+            return;
+        }
+        
+        this.settings.accentColor = accentColor;
+        this.applyAccentColor();
+        await this.saveSettingsToServer();
+    }
+
+    applyAccentColor() {
+        document.documentElement.style.setProperty('--accent-color', this.settings.accentColor);
     }
 
     async saveSettingsToServer() {
