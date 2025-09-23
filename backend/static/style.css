@@ -848,6 +848,81 @@ button:hover {
     background-color: var(--accent-color);
 }
 
+/* PDF Export Overlay */
+.pdf-export-sections {
+    padding: 2rem;
+}
+
+.pdf-export-section {
+    margin-bottom: 2rem;
+    padding: 1.5rem;
+    background-color: var(--secondary-bg);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.pdf-filename-input {
+    padding: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--primary-bg);
+    color: var(--text-primary);
+    margin-right: 0.5rem;
+    width: 200px;
+}
+
+.pdf-extension {
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.pdf-label-list {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 1rem;
+    background-color: var(--primary-bg);
+}
+
+.pdf-label-item {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0.5rem;
+    padding: 0.25rem;
+}
+
+.pdf-label-item:last-child {
+    margin-bottom: 0;
+}
+
+.pdf-label-checkbox {
+    margin-right: 0.75rem;
+}
+
+.pdf-label-name {
+    background-color: var(--accent-color);
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 12px;
+    font-size: 0.8rem;
+}
+
+.pdf-export-btn {
+    background-color: var(--accent-color);
+    color: white;
+    padding: 0.75rem 2rem;
+    border: none;
+    border-radius: 6px;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: opacity 0.3s;
+}
+
+.pdf-export-btn:hover {
+    opacity: 0.9;
+}
+
 /* Add Event Overlay */
 .time-selector {
     margin-top: 0.5rem;

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Timeline</title>
     <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 </head>
 <body>
     <!-- Login Screen -->
@@ -88,6 +89,7 @@
                 </button>
                 <div id="burger-menu-content" class="burger-menu-content" style="display: none;">
                     <button id="settings-btn">Settings</button>
+                    <button id="export-pdf-btn">Export as PDF</button>
                     <button id="backup-btn">Backup</button>
                     <button id="user-logout-btn">Sign Out</button>
                 </div>
@@ -255,6 +257,53 @@
                     <input type="file" id="import-file" accept=".json" style="display: none;">
                     <button id="import-btn" class="backup-btn">Import Events</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PDF Export Overlay -->
+    <div id="pdf-export-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2>Export as PDF</h2>
+                <button class="close-overlay" id="close-pdf-export">&times;</button>
+            </div>
+            
+            <div class="pdf-export-sections">
+                <div class="pdf-export-section">
+                    <h3>File Name</h3>
+                    <div class="form-group">
+                        <label for="pdf-filename">PDF file name:</label>
+                        <input type="text" id="pdf-filename" placeholder="export" class="pdf-filename-input">
+                        <span class="pdf-extension">.pdf</span>
+                    </div>
+                </div>
+                
+                <div class="pdf-export-section">
+                    <h3>Select Labels</h3>
+                    <p>Choose which labels to include in the PDF export</p>
+                    <div id="pdf-label-list" class="pdf-label-list">
+                        <!-- Labels will be populated dynamically -->
+                    </div>
+                </div>
+                
+                <div class="pdf-export-section">
+                    <button id="generate-pdf-btn" class="pdf-export-btn">Export PDF</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PDF Export Error Overlay -->
+    <div id="pdf-export-error-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2>Export Error</h2>
+                <button class="close-overlay" id="close-pdf-error">&times;</button>
+            </div>
+            <div class="error-content">
+                <p>Please select at least one label to include in the PDF export.</p>
+                <button id="pdf-error-ok" class="primary-btn">OK</button>
             </div>
         </div>
     </div>
