@@ -155,10 +155,10 @@ class TimelineApp {
                     this.showUserTimeline();
                 }
             } else {
-                this.showError('login-error', data.message || 'Login failed');
+                this.showElementError('login-error', data.message || 'Login failed');
             }
         } catch (error) {
-            this.showError('login-error', 'Network error. Please try again.');
+            this.showElementError('login-error', 'Network error. Please try again.');
         }
     }
 
@@ -1434,18 +1434,18 @@ class TimelineApp {
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.className = 'pdf-label-checkbox';
-            checkbox.id = `pdf-label-${tag}`;
-            checkbox.value = tag;
+            checkbox.id = `pdf-label-${tag.name}`;
+            checkbox.value = tag.name;
             
             const label = document.createElement('label');
-            label.setAttribute('for', `pdf-label-${tag}`);
+            label.setAttribute('for', `pdf-label-${tag.name}`);
             label.style.cursor = 'pointer';
             label.style.display = 'flex';
             label.style.alignItems = 'center';
             
             const labelName = document.createElement('span');
             labelName.className = 'pdf-label-name';
-            labelName.textContent = tag;
+            labelName.textContent = tag.name;
             
             label.appendChild(labelName);
             labelItem.appendChild(checkbox);
@@ -1743,7 +1743,7 @@ class TimelineApp {
         this.showOverlay('delete-confirmation-overlay');
     }
 
-    showError(elementId, message) {
+    showElementError(elementId, message) {
         const errorEl = document.getElementById(elementId);
         errorEl.textContent = message;
         errorEl.style.display = 'block';
