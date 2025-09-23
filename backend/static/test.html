@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Timeline - PDF Export Test</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="jspdf.min.js"></script>
+</head>
+<body>
+    <!-- User Timeline Test -->
+    <div id="user-screen" class="screen">
+        <!-- Top Bar -->
+        <div class="top-bar">
+            <div class="top-bar-left">
+                <button id="notes-btn" class="notes-button">Notes</button>
+                <div class="event-count">
+                    <span id="total-event-count">3 Events in the list</span>
+                </div>
+            </div>
+            <div class="top-bar-center">
+                <span id="user-display-name">Test User</span>
+            </div>
+            <div class="top-bar-right">
+                <button id="burger-btn" class="burger-button">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+                <div id="burger-menu-content" class="burger-menu-content" style="display: none;">
+                    <button id="settings-btn">Settings</button>
+                    <button id="export-pdf-btn">Export as PDF</button>
+                    <button id="backup-btn">Backup</button>
+                    <button id="user-logout-btn">Sign Out</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Timeline Content -->
+        <div class="timeline-content">
+            <div class="timeline-container" id="timeline-container">
+                <div class="timeline-line"></div>
+                <div id="events-container" class="events-container">
+                    <!-- Sample Events for Testing -->
+                    <div class="event-item">
+                        <div class="event-header">
+                            <h3 class="event-title">Project Started</h3>
+                            <div class="event-timestamp">10:30:00 15/01/2024</div>
+                        </div>
+                        <div class="event-description">Started working on the timeline application project. This is a comprehensive tool for tracking personal events.</div>
+                        <div class="event-tags">
+                            <span class="event-tag">work</span>
+                            <span class="event-tag">project</span>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item">
+                        <div class="event-header">
+                            <h3 class="event-title">First Release</h3>
+                            <div class="event-timestamp">14:20:30 20/01/2024</div>
+                        </div>
+                        <div class="event-description">Released the first version of the timeline application with basic functionality.</div>
+                        <div class="event-tags">
+                            <span class="event-tag">milestone</span>
+                            <span class="event-tag">release</span>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item">
+                        <div class="event-header">
+                            <h3 class="event-title">PDF Export Feature</h3>
+                            <div class="event-timestamp">09:15:45 25/01/2024</div>
+                        </div>
+                        <div class="event-description">Implemented the PDF export functionality allowing users to export their timeline as a black and white PDF document.</div>
+                        <div class="event-tags">
+                            <span class="event-tag">feature</span>
+                            <span class="event-tag">export</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PDF Export Overlay -->
+    <div id="pdf-export-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2>Export as PDF</h2>
+                <button class="close-overlay" id="close-pdf-export">&times;</button>
+            </div>
+            
+            <div class="pdf-export-sections">
+                <div class="pdf-export-section">
+                    <h3>File Name</h3>
+                    <div class="form-group">
+                        <label for="pdf-filename">PDF file name:</label>
+                        <input type="text" id="pdf-filename" placeholder="export" class="pdf-filename-input">
+                        <span class="pdf-extension">.pdf</span>
+                    </div>
+                </div>
+                
+                <div class="pdf-export-section">
+                    <h3>Select Labels</h3>
+                    <p>Choose which labels to include in the PDF export</p>
+                    <div id="pdf-label-list" class="pdf-label-list">
+                        <!-- Sample labels for testing -->
+                        <div class="pdf-label-item">
+                            <input type="checkbox" class="pdf-label-checkbox" id="pdf-label-work" value="work">
+                            <label for="pdf-label-work" style="cursor: pointer; display: flex; align-items: center;">
+                                <span class="pdf-label-name">work</span>
+                            </label>
+                        </div>
+                        <div class="pdf-label-item">
+                            <input type="checkbox" class="pdf-label-checkbox" id="pdf-label-project" value="project">
+                            <label for="pdf-label-project" style="cursor: pointer; display: flex; align-items: center;">
+                                <span class="pdf-label-name">project</span>
+                            </label>
+                        </div>
+                        <div class="pdf-label-item">
+                            <input type="checkbox" class="pdf-label-checkbox" id="pdf-label-milestone" value="milestone">
+                            <label for="pdf-label-milestone" style="cursor: pointer; display: flex; align-items: center;">
+                                <span class="pdf-label-name">milestone</span>
+                            </label>
+                        </div>
+                        <div class="pdf-label-item">
+                            <input type="checkbox" class="pdf-label-checkbox" id="pdf-label-release" value="release">
+                            <label for="pdf-label-release" style="cursor: pointer; display: flex; align-items: center;">
+                                <span class="pdf-label-name">release</span>
+                            </label>
+                        </div>
+                        <div class="pdf-label-item">
+                            <input type="checkbox" class="pdf-label-checkbox" id="pdf-label-feature" value="feature">
+                            <label for="pdf-label-feature" style="cursor: pointer; display: flex; align-items: center;">
+                                <span class="pdf-label-name">feature</span>
+                            </label>
+                        </div>
+                        <div class="pdf-label-item">
+                            <input type="checkbox" class="pdf-label-checkbox" id="pdf-label-export" value="export">
+                            <label for="pdf-label-export" style="cursor: pointer; display: flex; align-items: center;">
+                                <span class="pdf-label-name">export</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="pdf-export-section">
+                    <button id="generate-pdf-btn" class="pdf-export-btn">Export PDF</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PDF Export Error Overlay -->
+    <div id="pdf-export-error-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2>Export Error</h2>
+                <button class="close-overlay" id="close-pdf-error">&times;</button>
+            </div>
+            <div class="error-content">
+                <p>Please select at least one label to include in the PDF export.</p>
+                <button id="pdf-error-ok" class="primary-btn">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Simple test script for PDF export functionality
+        const mockEvents = [
+            {
+                title: "Project Started",
+                description: "Started working on the timeline application project. This is a comprehensive tool for tracking personal events.",
+                timestamp: new Date("2024-01-15T10:30:00"),
+                tags: ["work", "project"]
+            },
+            {
+                title: "First Release", 
+                description: "Released the first version of the timeline application with basic functionality.",
+                timestamp: new Date("2024-01-20T14:20:30"),
+                tags: ["milestone", "release"]
+            },
+            {
+                title: "PDF Export Feature",
+                description: "Implemented the PDF export functionality allowing users to export their timeline as a black and white PDF document.",
+                timestamp: new Date("2024-01-25T09:15:45"),
+                tags: ["feature", "export"]
+            }
+        ];
+
+        // Toggle burger menu
+        document.getElementById('burger-btn').addEventListener('click', function() {
+            const menu = document.getElementById('burger-menu-content');
+            menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+        });
+
+        // Show PDF export overlay
+        document.getElementById('export-pdf-btn').addEventListener('click', function() {
+            document.getElementById('pdf-export-overlay').style.display = 'block';
+            document.getElementById('burger-menu-content').style.display = 'none';
+        });
+
+        // Close overlay buttons
+        document.querySelectorAll('.close-overlay').forEach(btn => {
+            btn.addEventListener('click', function() {
+                this.closest('.overlay').style.display = 'none';
+            });
+        });
+
+        // Error OK button
+        document.getElementById('pdf-error-ok').addEventListener('click', function() {
+            document.getElementById('pdf-export-error-overlay').style.display = 'none';
+        });
+
+        // Generate PDF button
+        document.getElementById('generate-pdf-btn').addEventListener('click', function() {
+            // Get selected labels
+            const selectedLabels = [];
+            const checkboxes = document.querySelectorAll('.pdf-label-checkbox:checked');
+            checkboxes.forEach(cb => {
+                selectedLabels.push(cb.value);
+            });
+            
+            // Validate that at least one label is selected
+            if (selectedLabels.length === 0) {
+                document.getElementById('pdf-export-error-overlay').style.display = 'block';
+                return;
+            }
+            
+            // Get filename
+            let filename = document.getElementById('pdf-filename').value.trim();
+            if (!filename) {
+                filename = 'export';
+            }
+            
+            // Filter events by selected labels
+            const filteredEvents = mockEvents.filter(event => {
+                return event.tags && event.tags.some(tag => selectedLabels.includes(tag));
+            });
+            
+            if (filteredEvents.length === 0) {
+                alert('No events found with the selected labels');
+                return;
+            }
+            
+            // Generate PDF
+            createPdfDocument(filteredEvents, filename);
+            document.getElementById('pdf-export-overlay').style.display = 'none';
+        });
+
+        function createPdfDocument(events, filename) {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            
+            // Set document properties
+            doc.setProperties({
+                title: 'Timeline Export',
+                subject: 'Timeline Events',
+                author: 'Timeline App',
+                keywords: 'timeline, events',
+                creator: 'Timeline App'
+            });
+            
+            // Set font and colors for black/white theme
+            doc.setFont('helvetica');
+            doc.setTextColor(0, 0, 0); // Black text
+            
+            // Add title
+            doc.setFontSize(20);
+            doc.text('Timeline Export', 20, 20);
+            
+            // Add export date
+            doc.setFontSize(10);
+            const exportDate = new Date().toLocaleDateString('en-GB', {
+                day: '2-digit',
+                month: '2-digit', 
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            doc.text(`Exported on: ${exportDate}`, 20, 30);
+            
+            // Sort events by timestamp (oldest first)
+            const sortedEvents = [...events].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            
+            let yPosition = 50;
+            const pageHeight = doc.internal.pageSize.height;
+            const lineHeight = 6;
+            const marginBottom = 20;
+            
+            for (let i = 0; i < sortedEvents.length; i++) {
+                const event = sortedEvents[i];
+                
+                // Check if we need a new page
+                if (yPosition > pageHeight - marginBottom - 40) {
+                    doc.addPage();
+                    yPosition = 20;
+                }
+                
+                // Draw timeline line (vertical line on the left)
+                doc.setDrawColor(113, 1, 147); // Accent color in grayscale equivalent
+                doc.setLineWidth(2);
+                doc.line(15, yPosition - 5, 15, yPosition + 25);
+                
+                // Draw timeline dot
+                doc.setFillColor(113, 1, 147);
+                doc.circle(15, yPosition + 5, 2, 'F');
+                
+                // Event title
+                doc.setFontSize(14);
+                doc.setFont('helvetica', 'bold');
+                doc.text(event.title, 25, yPosition);
+                
+                // Event timestamp
+                const timestamp = new Date(event.timestamp).toLocaleString('en-GB', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
+                doc.setFontSize(10);
+                doc.setFont('helvetica', 'normal');
+                const timestampWidth = doc.getStringUnitWidth(timestamp) * 10;
+                doc.text(timestamp, doc.internal.pageSize.width - 20 - timestampWidth, yPosition);
+                
+                yPosition += 8;
+                
+                // Event description
+                doc.setFontSize(11);
+                const description = event.description;
+                const maxWidth = doc.internal.pageSize.width - 45;
+                const descriptionLines = doc.splitTextToSize(description, maxWidth);
+                
+                for (const line of descriptionLines) {
+                    if (yPosition > pageHeight - marginBottom - 10) {
+                        doc.addPage();
+                        yPosition = 20;
+                    }
+                    doc.text(line, 25, yPosition);
+                    yPosition += lineHeight;
+                }
+                
+                // Event tags
+                if (event.tags && event.tags.length > 0) {
+                    yPosition += 2;
+                    doc.setFontSize(9);
+                    doc.setFont('helvetica', 'italic');
+                    const tagsText = `Tags: ${event.tags.join(', ')}`;
+                    doc.text(tagsText, 25, yPosition);
+                    yPosition += 6;
+                }
+                
+                yPosition += 10; // Space between events
+            }
+            
+            // Save the PDF
+            doc.save(`${filename}.pdf`);
+        }
+    </script>
+</body>
+</html>
