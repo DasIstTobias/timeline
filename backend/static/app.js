@@ -122,6 +122,7 @@ class TimelineApp {
         
         const username = document.getElementById('username').value;
         const password = document.getElementById('password').value;
+        const rememberMe = document.getElementById('remember-me').checked;
         
         try {
             const response = await fetch('/api/login', {
@@ -129,7 +130,7 @@ class TimelineApp {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ username, password }),
+                body: JSON.stringify({ username, password, remember_me: rememberMe }),
                 credentials: 'include'
             });
             
@@ -138,6 +139,9 @@ class TimelineApp {
             if (data.success) {
                 this.userPassword = password; // Store for encryption
                 this.currentUser = { username, is_admin: data.user_type === 'admin' };
+                
+                // Store remember me preference for this session
+                localStorage.setItem('rememberMe', rememberMe.toString());
                 
                 if (data.user_type === 'admin') {
                     this.showAdminDashboard();
@@ -167,6 +171,7 @@ class TimelineApp {
         this.userPassword = null;
         this.events = [];
         this.tags = [];
+        localStorage.removeItem('rememberMe');
         location.reload();
     }
 
@@ -185,9 +190,16 @@ class TimelineApp {
         this.hideAllScreens();
         document.getElementById('user-screen').style.display = 'flex';
         
-        // If we don't have the user password (e.g., after page refresh), prompt for it
+        // If we don't have the user password (e.g., after page refresh), check remember me preference
         if (!this.userPassword) {
-            await this.promptForPassword();
+            const rememberMe = localStorage.getItem('rememberMe') === 'true';
+            if (rememberMe) {
+                await this.promptForPassword();
+            } else {
+                // If remember me was not checked, log out completely
+                this.logout();
+                return;
+            }
         }
         
         await this.loadUserData();

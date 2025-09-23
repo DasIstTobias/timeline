@@ -108,6 +108,52 @@ button:hover {
     background-color: #5a0076;
 }
 
+/* Checkbox styling */
+.checkbox-group {
+    margin: 1rem 0;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    font-size: 0.95rem;
+    font-weight: normal;
+}
+
+.checkbox-label input[type="checkbox"] {
+    display: none;
+}
+
+.checkbox-custom {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border-color);
+    border-radius: 4px;
+    margin-right: 0.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s;
+    background-color: var(--primary-bg);
+}
+
+.checkbox-label input[type="checkbox"]:checked + .checkbox-custom {
+    background-color: var(--accent-color);
+    border-color: var(--accent-color);
+}
+
+.checkbox-label input[type="checkbox"]:checked + .checkbox-custom::after {
+    content: '✓';
+    color: white;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.checkbox-label:hover .checkbox-custom {
+    border-color: var(--accent-color);
+}
+
 .error-message {
     color: var(--error-color);
     margin-top: 1rem;
@@ -1112,7 +1158,7 @@ button:hover {
 
 /* Password Prompt Overlay */
 .password-prompt-content {
-    padding: 1rem 0;
+    padding: 1.5rem 2rem;
 }
 
 .password-prompt-content .info-text {
