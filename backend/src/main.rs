@@ -107,6 +107,7 @@ async fn serve_index(_headers: HeaderMap, State(_state): State<AppState>) -> Res
 struct LoginRequest {
     username: String,
     password: String,
+    remember_me: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -135,7 +136,13 @@ async fn login(
             let session_id = create_session(user_id, &state.sessions).await;
             
             let mut headers = HeaderMap::new();
-            let cookie_value = format!("session_id={}; HttpOnly; Path=/; Max-Age=86400", session_id);
+            let cookie_value = if req.remember_me.unwrap_or(false) {
+                // Persistent cookie for 24 hours when remember me is checked
+                format!("session_id={}; HttpOnly; Path=/; Max-Age=86400", session_id)
+            } else {
+                // Session-only cookie when remember me is not checked
+                format!("session_id={}; HttpOnly; Path=/", session_id)
+            };
             headers.insert(header::SET_COOKIE, cookie_value.parse().unwrap());
             
             return Ok((headers, Json(LoginResponse {
@@ -157,7 +164,7 @@ async fn logout(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Json<serde_json::Value> {
-    if let Some(session_id) = extract_session_id(&headers) {
+    if let Some(session_id) = auth::extract_session_id(&headers) {
         state.sessions.write().await.remove(&session_id);
     }
     
@@ -652,14 +659,4 @@ async fn save_notes(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     Ok(Json(serde_json::json!({"success": true})))
-}
-
-fn extract_session_id(headers: &HeaderMap) -> Option<String> {
-    headers.get(header::COOKIE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|cookie_str| {
-            cookie_str.split(';')
-                .find(|cookie| cookie.trim().starts_with("session_id="))
-                .map(|cookie| cookie.trim().strip_prefix("session_id=").unwrap_or("").to_string())
-        })
 }

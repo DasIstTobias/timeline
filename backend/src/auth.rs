@@ -43,7 +43,7 @@ pub async fn verify_session(
     })
 }
 
-fn extract_session_id(headers: &HeaderMap) -> Option<String> {
+pub fn extract_session_id(headers: &HeaderMap) -> Option<String> {
     use axum::http::header;
     
     headers.get(header::COOKIE)
