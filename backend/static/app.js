@@ -331,14 +331,21 @@ class TimelineApp {
             if (response.ok) {
                 const encryptedTags = await response.json();
                 this.tags = [];
+                const seenTagNames = new Set(); // Track seen tag names to avoid duplicates
                 
                 for (const tag of encryptedTags) {
                     try {
-                        const decryptedTag = {
-                            id: tag.id,
-                            name: await cryptoUtils.decrypt(tag.name_encrypted, this.userPassword)
-                        };
-                        this.tags.push(decryptedTag);
+                        const decryptedTagName = await cryptoUtils.decrypt(tag.name_encrypted, this.userPassword);
+                        
+                        // Only add if we haven't seen this tag name before
+                        if (!seenTagNames.has(decryptedTagName)) {
+                            const decryptedTag = {
+                                id: tag.id,
+                                name: decryptedTagName
+                            };
+                            this.tags.push(decryptedTag);
+                            seenTagNames.add(decryptedTagName);
+                        }
                     } catch (error) {
                         console.error('Failed to decrypt tag:', error);
                     }
