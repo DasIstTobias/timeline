@@ -82,6 +82,11 @@ class TimelineApp {
         document.getElementById('import-btn').addEventListener('click', () => this.importEvents());
         document.getElementById('import-file').addEventListener('change', (e) => this.handleImportFile(e));
         
+        // PDF Export
+        document.getElementById('export-pdf-btn').addEventListener('click', () => this.showPdfExportOverlay());
+        document.getElementById('generate-pdf-btn').addEventListener('click', () => this.generatePdf());
+        document.getElementById('pdf-error-ok').addEventListener('click', () => this.closeOverlay(document.getElementById('pdf-export-error-overlay')));
+        
         // Add event
         document.getElementById('add-event-form').addEventListener('submit', (e) => this.handleAddEvent(e));
         document.getElementById('time-toggle').addEventListener('change', () => this.toggleCustomTime());
@@ -150,10 +155,10 @@ class TimelineApp {
                     this.showUserTimeline();
                 }
             } else {
-                this.showError('login-error', data.message || 'Login failed');
+                this.showElementError('login-error', data.message || 'Login failed');
             }
         } catch (error) {
-            this.showError('login-error', 'Network error. Please try again.');
+            this.showElementError('login-error', 'Network error. Please try again.');
         }
     }
 
@@ -326,14 +331,21 @@ class TimelineApp {
             if (response.ok) {
                 const encryptedTags = await response.json();
                 this.tags = [];
+                const seenTagNames = new Set(); // Track seen tag names to avoid duplicates
                 
                 for (const tag of encryptedTags) {
                     try {
-                        const decryptedTag = {
-                            id: tag.id,
-                            name: await cryptoUtils.decrypt(tag.name_encrypted, this.userPassword)
-                        };
-                        this.tags.push(decryptedTag);
+                        const decryptedTagName = await cryptoUtils.decrypt(tag.name_encrypted, this.userPassword);
+                        
+                        // Only add if we haven't seen this tag name before
+                        if (!seenTagNames.has(decryptedTagName)) {
+                            const decryptedTag = {
+                                id: tag.id,
+                                name: decryptedTagName
+                            };
+                            this.tags.push(decryptedTag);
+                            seenTagNames.add(decryptedTagName);
+                        }
                     } catch (error) {
                         console.error('Failed to decrypt tag:', error);
                     }
@@ -531,10 +543,11 @@ class TimelineApp {
         
         switch (this.settings.timeSeparator) {
             case 'daily':
-                const dayKey = eventDate.toDateString();
-                const lastDayKey = lastSeparatorDate ? lastSeparatorDate.toDateString() : null;
-                if (dayKey !== lastDayKey) {
-                    return new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate());
+                // Normalize to start of day for comparison
+                const dayStart = new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate());
+                const lastDayStart = lastSeparatorDate ? new Date(lastSeparatorDate.getFullYear(), lastSeparatorDate.getMonth(), lastSeparatorDate.getDate()) : null;
+                if (!lastDayStart || dayStart.getTime() !== lastDayStart.getTime()) {
+                    return dayStart;
                 }
                 break;
                 
@@ -567,7 +580,10 @@ class TimelineApp {
         const d = new Date(date);
         const day = d.getDay();
         const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
-        return new Date(d.setDate(diff));
+        d.setDate(diff);
+        // Reset time to start of day for consistent comparison
+        d.setHours(0, 0, 0, 0);
+        return d;
     }
 
     createTimeSeparatorElement(separatorDate) {
@@ -1407,6 +1423,216 @@ class TimelineApp {
         e.target.value = '';
     }
 
+    // PDF Export functions
+    showPdfExportOverlay() {
+        this.populatePdfLabels();
+        this.showOverlay('pdf-export-overlay');
+    }
+
+    populatePdfLabels() {
+        const labelList = document.getElementById('pdf-label-list');
+        labelList.innerHTML = '';
+        
+        if (this.tags.length === 0) {
+            labelList.innerHTML = '<p style="text-align: center; color: var(--text-secondary);">No labels available</p>';
+            return;
+        }
+        
+        this.tags.forEach(tag => {
+            const labelItem = document.createElement('div');
+            labelItem.className = 'pdf-label-item';
+            
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'pdf-label-checkbox';
+            checkbox.id = `pdf-label-${tag.name}`;
+            checkbox.value = tag.name;
+            
+            const label = document.createElement('label');
+            label.setAttribute('for', `pdf-label-${tag.name}`);
+            label.style.cursor = 'pointer';
+            label.style.display = 'flex';
+            label.style.alignItems = 'center';
+            
+            const labelName = document.createElement('span');
+            labelName.className = 'pdf-label-name';
+            labelName.textContent = tag.name;
+            
+            label.appendChild(labelName);
+            labelItem.appendChild(checkbox);
+            labelItem.appendChild(label);
+            labelList.appendChild(labelItem);
+        });
+    }
+
+    async generatePdf() {
+        // Get selected labels
+        const selectedLabels = [];
+        const checkboxes = document.querySelectorAll('.pdf-label-checkbox:checked');
+        checkboxes.forEach(cb => {
+            selectedLabels.push(cb.value);
+        });
+        
+        // Validate that at least one label is selected
+        if (selectedLabels.length === 0) {
+            this.showOverlay('pdf-export-error-overlay');
+            return;
+        }
+        
+        // Get filename
+        let filename = document.getElementById('pdf-filename').value.trim();
+        if (!filename) {
+            filename = 'export';
+        }
+        
+        // Filter events by selected labels
+        const filteredEvents = this.events.filter(event => {
+            return event.tags && event.tags.some(tag => selectedLabels.includes(tag));
+        });
+        
+        if (filteredEvents.length === 0) {
+            this.showError('Export Error', 'No events found with the selected labels');
+            return;
+        }
+        
+        // Generate PDF
+        try {
+            await this.createPdfDocument(filteredEvents, filename);
+            this.closeOverlay(document.getElementById('pdf-export-overlay'));
+        } catch (error) {
+            console.error('PDF generation failed:', error);
+            this.showError('Export Error', 'Failed to generate PDF document');
+        }
+    }
+
+    async createPdfDocument(events, filename) {
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+        
+        // Set document properties
+        doc.setProperties({
+            title: 'Timeline Export',
+            subject: 'Timeline Events',
+            author: 'Timeline App',
+            keywords: 'timeline, events',
+            creator: 'Timeline App'
+        });
+        
+        // Set font and colors for black/white theme
+        doc.setFont('helvetica');
+        doc.setTextColor(0, 0, 0); // Black text
+        
+        // Helper function to add page numbers
+        const addPageNumber = (pageNum) => {
+            const pageWidth = doc.internal.pageSize.width;
+            const pageHeight = doc.internal.pageSize.height;
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.text(`${pageNum}`, pageWidth - 20, pageHeight - 10);
+        };
+        
+        // Add title
+        doc.setFontSize(20);
+        doc.text('Timeline Export', 20, 20);
+        
+        // Add export date
+        doc.setFontSize(10);
+        const exportDate = new Date().toLocaleDateString('en-GB', {
+            day: '2-digit',
+            month: '2-digit', 
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+        doc.text(`Exported on: ${exportDate}`, 20, 30);
+        
+        // Sort events by timestamp (oldest first)
+        const sortedEvents = [...events].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        
+        let yPosition = 50;
+        const pageHeight = doc.internal.pageSize.height;
+        const lineHeight = 6;
+        const marginBottom = 20;
+        let currentPageNumber = 1;
+        
+        // Add page number to first page
+        addPageNumber(currentPageNumber);
+        
+        for (let i = 0; i < sortedEvents.length; i++) {
+            const event = sortedEvents[i];
+            
+            // Check if we need a new page
+            if (yPosition > pageHeight - marginBottom - 40) {
+                doc.addPage();
+                currentPageNumber++;
+                addPageNumber(currentPageNumber);
+                yPosition = 20;
+            }
+            
+            // Draw timeline line (vertical line on the left)
+            doc.setDrawColor(113, 1, 147); // Accent color in grayscale equivalent
+            doc.setLineWidth(2);
+            doc.line(15, yPosition - 5, 15, yPosition + 25);
+            
+            // Draw timeline dot
+            doc.setFillColor(113, 1, 147);
+            doc.circle(15, yPosition + 5, 2, 'F');
+            
+            // Event title
+            doc.setFontSize(14);
+            doc.setFont('helvetica', 'bold');
+            doc.text(event.title, 25, yPosition);
+            
+            // Event timestamp
+            const timestamp = new Date(event.timestamp).toLocaleString('en-GB', {
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            const timestampWidth = doc.getStringUnitWidth(timestamp) * 10;
+            doc.text(timestamp, doc.internal.pageSize.width - 20 - timestampWidth, yPosition);
+            
+            yPosition += 8;
+            
+            // Event description
+            doc.setFontSize(11);
+            const description = event.description;
+            const maxWidth = doc.internal.pageSize.width - 45;
+            const descriptionLines = doc.splitTextToSize(description, maxWidth);
+            
+            for (const line of descriptionLines) {
+                if (yPosition > pageHeight - marginBottom - 10) {
+                    doc.addPage();
+                    currentPageNumber++;
+                    addPageNumber(currentPageNumber);
+                    yPosition = 20;
+                }
+                doc.text(line, 25, yPosition);
+                yPosition += lineHeight;
+            }
+            
+            // Event tags
+            if (event.tags && event.tags.length > 0) {
+                yPosition += 2;
+                doc.setFontSize(9);
+                doc.setFont('helvetica', 'italic');
+                const tagsText = `Tags: ${event.tags.join(', ')}`;
+                doc.text(tagsText, 25, yPosition);
+                yPosition += 6;
+            }
+            
+            yPosition += 10; // Space between events
+        }
+        
+        // Save the PDF
+        doc.save(`${filename}.pdf`);
+    }
+
     // Admin password change
     async handleAdminPasswordChange(e) {
         e.preventDefault();
@@ -1545,7 +1771,7 @@ class TimelineApp {
         this.showOverlay('delete-confirmation-overlay');
     }
 
-    showError(elementId, message) {
+    showElementError(elementId, message) {
         const errorEl = document.getElementById(elementId);
         errorEl.textContent = message;
         errorEl.style.display = 'block';
