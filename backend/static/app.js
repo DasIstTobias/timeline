@@ -543,10 +543,11 @@ class TimelineApp {
         
         switch (this.settings.timeSeparator) {
             case 'daily':
-                const dayKey = eventDate.toDateString();
-                const lastDayKey = lastSeparatorDate ? lastSeparatorDate.toDateString() : null;
-                if (dayKey !== lastDayKey) {
-                    return new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate());
+                // Normalize to start of day for comparison
+                const dayStart = new Date(eventDate.getFullYear(), eventDate.getMonth(), eventDate.getDate());
+                const lastDayStart = lastSeparatorDate ? new Date(lastSeparatorDate.getFullYear(), lastSeparatorDate.getMonth(), lastSeparatorDate.getDate()) : null;
+                if (!lastDayStart || dayStart.getTime() !== lastDayStart.getTime()) {
+                    return dayStart;
                 }
                 break;
                 
@@ -579,7 +580,10 @@ class TimelineApp {
         const d = new Date(date);
         const day = d.getDay();
         const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
-        return new Date(d.setDate(diff));
+        d.setDate(diff);
+        // Reset time to start of day for consistent comparison
+        d.setHours(0, 0, 0, 0);
+        return d;
     }
 
     createTimeSeparatorElement(separatorDate) {
@@ -1518,6 +1522,15 @@ class TimelineApp {
         doc.setFont('helvetica');
         doc.setTextColor(0, 0, 0); // Black text
         
+        // Helper function to add page numbers
+        const addPageNumber = (pageNum) => {
+            const pageWidth = doc.internal.pageSize.width;
+            const pageHeight = doc.internal.pageSize.height;
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.text(`${pageNum}`, pageWidth - 20, pageHeight - 10);
+        };
+        
         // Add title
         doc.setFontSize(20);
         doc.text('Timeline Export', 20, 20);
@@ -1540,6 +1553,10 @@ class TimelineApp {
         const pageHeight = doc.internal.pageSize.height;
         const lineHeight = 6;
         const marginBottom = 20;
+        let currentPageNumber = 1;
+        
+        // Add page number to first page
+        addPageNumber(currentPageNumber);
         
         for (let i = 0; i < sortedEvents.length; i++) {
             const event = sortedEvents[i];
@@ -1547,6 +1564,8 @@ class TimelineApp {
             // Check if we need a new page
             if (yPosition > pageHeight - marginBottom - 40) {
                 doc.addPage();
+                currentPageNumber++;
+                addPageNumber(currentPageNumber);
                 yPosition = 20;
             }
             
@@ -1589,6 +1608,8 @@ class TimelineApp {
             for (const line of descriptionLines) {
                 if (yPosition > pageHeight - marginBottom - 10) {
                     doc.addPage();
+                    currentPageNumber++;
+                    addPageNumber(currentPageNumber);
                     yPosition = 20;
                 }
                 doc.text(line, 25, yPosition);
