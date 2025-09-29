@@ -215,7 +215,7 @@ async fn login(
 async fn logout(
     headers: HeaderMap,
     State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> Result<(HeaderMap, Json<serde_json::Value>), StatusCode> {
     // Verify session exists before logout
     let _auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
@@ -224,7 +224,12 @@ async fn logout(
         state.sessions.write().await.remove(&session_id);
     }
     
-    Ok(Json(serde_json::json!({"success": true})))
+    // Invalidate the cookie by setting it with Max-Age=0
+    let mut response_headers = HeaderMap::new();
+    let cookie_value = "session_id=; HttpOnly; Path=/; Max-Age=0; SameSite=Strict";
+    response_headers.insert(header::SET_COOKIE, cookie_value.parse().unwrap());
+    
+    Ok((response_headers, Json(serde_json::json!({"success": true}))))
 }
 
 #[derive(Deserialize)]
