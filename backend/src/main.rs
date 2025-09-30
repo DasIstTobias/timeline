@@ -1,6 +1,6 @@
 use axum::{
     extract::{State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode, Method, HeaderValue},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -18,7 +18,7 @@ mod crypto;
 mod models;
 mod twofa;
 
-use auth::{create_session, verify_session};
+use auth::{create_session, verify_session, SessionData};
 use crypto::{generate_random_password, hash_password, verify_password};
 use twofa::TwoFABruteForceProtection;
 
@@ -51,7 +51,7 @@ type AppState = Arc<AppData>;
 #[derive(Clone)]
 struct AppData {
     db: PgPool,
-    sessions: Arc<RwLock<HashMap<String, Uuid>>>, // session_id -> user_id
+    sessions: Arc<RwLock<HashMap<String, SessionData>>>, // session_id -> SessionData
     pending_2fa: Arc<RwLock<HashMap<String, Pending2FAAuth>>>, // temp_session_id -> pending auth
     pending_2fa_secrets: Arc<RwLock<HashMap<Uuid, PendingSecret>>>, // user_id -> pending secret
     twofa_protection: Arc<TwoFABruteForceProtection>,
@@ -105,6 +105,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
     });
     
+    // Start background task to cleanup expired sessions
+    let sessions_for_cleanup = app_state.sessions.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await; // Run every hour
+            auth::cleanup_expired_sessions(&sessions_for_cleanup).await;
+            log::info!("Cleaned up expired sessions");
+        }
+    });
+    
+    // Configure CORS - restrict to localhost for development
+    // In production, this should be set to the actual domain
+    let cors = CorsLayer::new()
+        .allow_origin([
+            "http://localhost:8080".parse::<HeaderValue>().unwrap(),
+            "http://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
+        ])
+        .allow_methods([Method::GET, Method::POST])
+        .allow_credentials(true)
+        .allow_headers([header::CONTENT_TYPE, header::COOKIE]);
+    
     let app = Router::new()
         .route("/", get(serve_index))
         .route("/api/login", post(login))
@@ -131,7 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/2fa/disable", post(disable_2fa))
         .nest_service("/static", ServeDir::new("static"))
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024)) // 2MB limit
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(app_state);
     
     log::info!("Timeline server starting on port 8080");
