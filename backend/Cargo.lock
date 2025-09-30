@@ -2154,10 +2154,13 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sha1",
  "sqlx",
  "tokio",
+ "totp-lite",
  "tower 0.4.13",
  "tower-http",
+ "urlencoding",
  "uuid",
 ]
 
@@ -2239,6 +2242,18 @@ dependencies = [
  "futures-sink",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "totp-lite"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8e43134db17199f7f721803383ac5854edd0d3d523cc34dba321d6acfbe76c3"
+dependencies = [
+ "digest",
+ "hmac",
+ "sha1",
+ "sha2",
 ]
 
 [[package]]

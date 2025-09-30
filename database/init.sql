@@ -9,6 +9,9 @@ CREATE TABLE users (
     display_name_encrypted TEXT,
     settings_encrypted TEXT,
     is_admin BOOLEAN DEFAULT FALSE,
+    totp_secret TEXT,
+    totp_enabled BOOLEAN DEFAULT FALSE,
+    totp_enabled_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 

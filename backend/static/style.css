@@ -1283,3 +1283,96 @@ button:hover {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--text-secondary);
 }
+/* Two-Factor Authentication Overlays */
+.twofa-warning-content,
+.twofa-setup-content,
+.twofa-disable-content {
+    padding: 2rem;
+}
+
+.twofa-section {
+    margin-bottom: 2rem;
+    padding: 1.5rem;
+    background-color: var(--secondary-bg);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.twofa-section h3 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    color: var(--accent-color);
+    font-size: 1.2rem;
+}
+
+.twofa-section p {
+    margin-bottom: 1rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+}
+
+.twofa-section p:last-of-type {
+    margin-bottom: 0;
+}
+
+.twofa-section strong {
+    color: var(--text-primary);
+}
+
+.qr-code-container {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 1.5rem;
+    background-color: white;
+    border-radius: 8px;
+    margin: 1.5rem 0;
+}
+
+.qr-code-container canvas {
+    display: block;
+}
+
+.totp-secret-container {
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background-color: var(--primary-bg);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.totp-secret-container p {
+    margin-bottom: 0.5rem;
+    color: var(--text-primary);
+}
+
+.totp-secret-container code {
+    display: block;
+    padding: 0.75rem;
+    background-color: var(--secondary-bg);
+    color: var(--text-primary);
+    font-weight: bold;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 1rem;
+    word-break: break-all;
+    border: 1px solid var(--border-color);
+}
+
+.twofa-setup-content .form-group,
+.twofa-disable-content .form-group {
+    margin-bottom: 1.5rem;
+}
+
+.twofa-setup-content .form-group:last-of-type,
+.twofa-disable-content .form-group:last-of-type {
+    margin-bottom: 0;
+}
+
+.twofa-setup-content .form-actions,
+.twofa-disable-content .form-actions,
+.twofa-warning-content .form-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 2rem;
+}
