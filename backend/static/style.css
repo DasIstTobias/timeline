@@ -1350,7 +1350,8 @@ button:hover {
     display: block;
     padding: 0.75rem;
     background-color: var(--secondary-bg);
-    color: var(--accent-color);
+    color: var(--text-primary);
+    font-weight: bold;
     border-radius: 4px;
     font-family: 'Courier New', monospace;
     font-size: 1rem;
