@@ -1897,12 +1897,12 @@ class TimelineApp {
                 credentials: 'include'
             });
             
+            const statusText = document.getElementById('twofa-status-text');
+            const enableBtn = document.getElementById('enable-2fa-btn');
+            const disableBtn = document.getElementById('disable-2fa-btn');
+            
             if (response.ok) {
                 const data = await response.json();
-                const statusContainer = document.getElementById('twofa-status-container');
-                const statusText = document.getElementById('twofa-status-text');
-                const enableBtn = document.getElementById('enable-2fa-btn');
-                const disableBtn = document.getElementById('disable-2fa-btn');
                 
                 if (data.enabled) {
                     const enabledDate = new Date(data.enabled_at);
@@ -1916,9 +1916,21 @@ class TimelineApp {
                     enableBtn.style.display = 'inline-block';
                     disableBtn.style.display = 'none';
                 }
+            } else {
+                // If the request failed, show an error but still show the enable button
+                statusText.textContent = '2FA is currently disabled.';
+                enableBtn.style.display = 'inline-block';
+                disableBtn.style.display = 'none';
             }
         } catch (error) {
             console.error('Error loading 2FA status:', error);
+            // On error, default to showing the enable button
+            const statusText = document.getElementById('twofa-status-text');
+            const enableBtn = document.getElementById('enable-2fa-btn');
+            const disableBtn = document.getElementById('disable-2fa-btn');
+            statusText.textContent = 'Error loading 2FA status. Please refresh the page.';
+            enableBtn.style.display = 'inline-block';
+            disableBtn.style.display = 'none';
         }
     }
 
