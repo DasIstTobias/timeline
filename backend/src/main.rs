@@ -53,6 +53,7 @@ struct AppData {
     db: PgPool,
     sessions: Arc<RwLock<HashMap<String, Uuid>>>, // session_id -> user_id
     pending_2fa: Arc<RwLock<HashMap<String, Pending2FAAuth>>>, // temp_session_id -> pending auth
+    pending_2fa_secrets: Arc<RwLock<HashMap<Uuid, PendingSecret>>>, // user_id -> pending secret
     twofa_protection: Arc<TwoFABruteForceProtection>,
 }
 
@@ -63,6 +64,13 @@ struct Pending2FAAuth {
     username: String,
     is_admin: bool,
     remember_me: bool,
+    created_at: std::time::SystemTime,
+}
+
+// Pending 2FA secret during setup
+#[derive(Clone)]
+struct PendingSecret {
+    secret: String,
     created_at: std::time::SystemTime,
 }
 
@@ -92,6 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db,
         sessions: Arc::new(RwLock::new(HashMap::new())),
         pending_2fa: Arc::new(RwLock::new(HashMap::new())),
+        pending_2fa_secrets: Arc::new(RwLock::new(HashMap::new())),
         twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
     });
     
@@ -225,11 +234,11 @@ async fn login(
                     created_at: std::time::SystemTime::now(),
                 });
                 
-                // Return success but indicate 2FA is required
+                // Return without revealing success until 2FA is completed
                 return Ok((HeaderMap::new(), Json(LoginResponse {
-                    success: true,
-                    user_type: Some("user".to_string()),
-                    message: None,
+                    success: false,
+                    user_type: None,
+                    message: Some("2FA verification required".to_string()),
                     requires_2fa: Some(true),
                     temp_session_id: Some(temp_session_id),
                 })));
@@ -1010,6 +1019,11 @@ async fn get_2fa_status(
     }))
 }
 
+#[derive(Deserialize)]
+struct Setup2FARequest {
+    password: String,
+}
+
 #[derive(Serialize)]
 struct Setup2FAResponse {
     success: bool,
@@ -1021,12 +1035,30 @@ struct Setup2FAResponse {
 async fn setup_2fa(
     headers: HeaderMap,
     State(state): State<AppState>,
+    Json(req): Json<Setup2FARequest>,
 ) -> Result<Json<Setup2FAResponse>, StatusCode> {
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
     if auth_state.is_admin {
         return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Verify password first
+    let password_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+        .bind(auth_state.user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let password_valid = verify_password(&req.password, &password_hash).await.unwrap_or(false);
+    if !password_valid {
+        return Ok(Json(Setup2FAResponse {
+            success: false,
+            secret: None,
+            qr_uri: None,
+            message: Some("Invalid password".to_string()),
+        }));
     }
     
     // Check if 2FA is already enabled
@@ -1047,6 +1079,16 @@ async fn setup_2fa(
     
     // Generate new TOTP secret
     let secret = twofa::generate_totp_secret();
+    
+    // Store secret temporarily (expires in 10 minutes)
+    state.pending_2fa_secrets.write().await.insert(
+        auth_state.user_id,
+        PendingSecret {
+            secret: secret.clone(),
+            created_at: std::time::SystemTime::now(),
+        }
+    );
+    
     let qr_uri = twofa::generate_totp_uri(&secret, &auth_state.username, "Timeline");
     
     Ok(Json(Setup2FAResponse {
@@ -1059,7 +1101,6 @@ async fn setup_2fa(
 
 #[derive(Deserialize)]
 struct Enable2FARequest {
-    secret: String,
     totp_code: String,
     password: String,
 }
@@ -1082,18 +1123,35 @@ async fn enable_2fa(
         return Err(StatusCode::FORBIDDEN);
     }
     
-    // Validate inputs
-    if let Err(msg) = validate_input_string(&req.secret, Some(100)) {
-        return Ok(Json(Enable2FAResponse {
-            success: false,
-            message: Some(format!("Invalid secret: {}", msg)),
-        }));
-    }
-    
     if req.totp_code.len() != 6 || !req.totp_code.chars().all(|c| c.is_ascii_digit()) {
         return Ok(Json(Enable2FAResponse {
             success: false,
             message: Some("Invalid 2FA code format".to_string()),
+        }));
+    }
+    
+    // Get secret from server storage, not from client
+    let pending_secret = {
+        let secrets = state.pending_2fa_secrets.read().await;
+        secrets.get(&auth_state.user_id).cloned()
+    };
+    
+    let pending = match pending_secret {
+        Some(p) => p,
+        None => {
+            return Ok(Json(Enable2FAResponse {
+                success: false,
+                message: Some("No 2FA setup in progress. Please call /api/2fa/setup first.".to_string()),
+            }));
+        }
+    };
+    
+    // Check expiration (10 minutes)
+    if pending.created_at.elapsed().unwrap_or_default() > std::time::Duration::from_secs(600) {
+        state.pending_2fa_secrets.write().await.remove(&auth_state.user_id);
+        return Ok(Json(Enable2FAResponse {
+            success: false,
+            message: Some("Setup expired. Please start again.".to_string()),
         }));
     }
     
@@ -1126,21 +1184,24 @@ async fn enable_2fa(
         }));
     }
     
-    // Verify TOTP code
-    if !twofa::verify_totp_code(&req.secret, &req.totp_code) {
+    // Verify TOTP code against SERVER's secret, not client's
+    if !twofa::verify_totp_code(&pending.secret, &req.totp_code) {
         return Ok(Json(Enable2FAResponse {
             success: false,
             message: Some("Invalid 2FA code".to_string()),
         }));
     }
     
-    // Enable 2FA
+    // Enable 2FA with SERVER's secret
     sqlx::query("UPDATE users SET totp_secret = $1, totp_enabled = true, totp_enabled_at = NOW() WHERE id = $2")
-        .bind(&req.secret)
+        .bind(&pending.secret)
         .bind(auth_state.user_id)
         .execute(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Clean up temporary storage
+    state.pending_2fa_secrets.write().await.remove(&auth_state.user_id);
     
     Ok(Json(Enable2FAResponse {
         success: true,

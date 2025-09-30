@@ -1947,15 +1947,27 @@ class TimelineApp {
     }
 
     continueEnable2FAStep1() {
-        // Close step 1, start step 2
+        // Close step 1, prompt for password, then start step 2
         this.closeOverlay(document.getElementById('enable-2fa-step1-overlay'));
-        this.setupEnable2FAStep2();
+        
+        // Prompt for password
+        const password = prompt('Please enter your password to continue:');
+        if (!password) {
+            // User cancelled
+            return;
+        }
+        
+        this.setupEnable2FAStep2(password);
     }
 
-    async setupEnable2FAStep2() {
+    async setupEnable2FAStep2(password) {
         try {
             const response = await fetch('/api/2fa/setup', {
                 method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ password }),
                 credentials: 'include'
             });
             
@@ -2013,7 +2025,6 @@ class TimelineApp {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    secret: this.temp2FASecret,
                     totp_code: totpCode,
                     password: password
                 }),
