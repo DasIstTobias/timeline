@@ -1907,9 +1907,8 @@ class TimelineApp {
                     
                     if (data.enabled) {
                         const enabledDate = new Date(data.enabled_at);
-                        const formattedDate = this.formatDateForDisplay(enabledDate);
-                        const formattedTime = this.formatTimeForDisplay(enabledDate);
-                        statusText.textContent = `2FA is enabled. Activated on ${formattedDate} at ${formattedTime}.`;
+                        const formattedDateTime = this.formatDateTime(enabledDate);
+                        statusText.textContent = `2FA is enabled. Activated on ${formattedDateTime}.`;
                         enableBtn.style.display = 'none';
                         disableBtn.style.display = 'inline-block';
                     } else {
