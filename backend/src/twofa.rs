@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
-use totp_lite::{totp_custom, Sha1};
+use totp_lite::{totp, Sha1};
 
 // Brute-force protection: track failed attempts per identifier (IP or session)
 pub struct TwoFABruteForceProtection {
@@ -117,15 +117,17 @@ pub fn verify_totp_code(secret: &str, code: &str) -> bool {
         .unwrap()
         .as_secs();
 
-    // TOTP uses 30-second time steps
-    let time_step = timestamp / 30;
-
-    // Check current time step and one step before/after to account for clock skew
-    for offset in [-1i64, 0, 1] {
-        let test_step = (time_step as i64 + offset) as u64;
-        let generated_code = totp_custom::<Sha1>(30, 6, &secret_bytes, test_step);
+    // Check current time and 30 seconds before/after to account for clock skew
+    for offset in [-30i64, 0, 30] {
+        let test_timestamp = (timestamp as i64 + offset) as u64;
+        let generated_code = totp::<Sha1>(&secret_bytes, test_timestamp);
         
-        if format!("{:06}", generated_code) == code {
+        // totp() returns a String, but it may not always be 6 digits
+        // Extract the last 6 digits
+        let code_num: u64 = generated_code.parse().unwrap_or(0);
+        let code_6_digit = format!("{:06}", code_num % 1000000);
+        
+        if code_6_digit == code {
             return true;
         }
     }
