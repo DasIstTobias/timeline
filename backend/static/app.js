@@ -153,6 +153,9 @@ class TimelineApp {
             const data = await response.json();
             
             if (data.success) {
+                // Store remember me preference for this session
+                localStorage.setItem('rememberMe', rememberMe.toString());
+                
                 // Check if 2FA is required
                 if (data.requires_2fa && data.temp_session_id) {
                     // Store temporary session ID and proceed to 2FA screen
@@ -164,9 +167,6 @@ class TimelineApp {
                     // No 2FA required - proceed normally
                     this.userPassword = password; // Store for encryption
                     this.currentUser = { username, is_admin: data.user_type === 'admin' };
-                    
-                    // Store remember me preference for this session
-                    localStorage.setItem('rememberMe', rememberMe.toString());
                     
                     if (data.user_type === 'admin') {
                         this.showAdminDashboard();
@@ -1879,7 +1879,7 @@ class TimelineApp {
             if (data.success) {
                 // 2FA verification successful
                 this.temp2FASessionId = null;
-                localStorage.setItem('rememberMe', 'false');
+                // rememberMe was already set in handleLogin, don't override it
                 await this.loadUserData();
                 this.showUserTimeline();
             } else {
@@ -2020,8 +2020,8 @@ class TimelineApp {
                 // Show success message
                 this.showSuccess('2FA Enabled', 'Two-Factor Authentication has been successfully enabled for your account.');
                 
-                // Reload 2FA status in settings
-                this.load2FAStatus();
+                // Reload 2FA status in settings (will update when settings is reopened)
+                await this.load2FAStatus();
             } else {
                 this.showElementError('enable-2fa-step2-error', data.message || 'Failed to enable 2FA');
             }
@@ -2075,7 +2075,7 @@ class TimelineApp {
                 this.showSuccess('2FA Disabled', 'Two-Factor Authentication has been disabled for your account.');
                 
                 // Reload 2FA status in settings
-                this.load2FAStatus();
+                await this.load2FAStatus();
             } else {
                 this.showElementError('disable-2fa-error', data.message || 'Failed to disable 2FA');
             }
