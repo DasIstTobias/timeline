@@ -64,6 +64,7 @@ struct Pending2FAAuth {
     username: String,
     is_admin: bool,
     remember_me: bool,
+    password: String, // Store password temporarily to decrypt TOTP secret
     created_at: std::time::SystemTime,
 }
 
@@ -231,6 +232,7 @@ async fn login(
                     username: username.clone(),
                     is_admin,
                     remember_me: req.remember_me.unwrap_or(false),
+                    password: req.password.clone(), // Store password temporarily for TOTP decryption
                     created_at: std::time::SystemTime::now(),
                 });
                 
@@ -919,16 +921,16 @@ async fn verify_2fa_login(
         }
     }
     
-    // Get TOTP secret from database
-    let totp_secret: Option<String> = sqlx::query_scalar(
-        "SELECT totp_secret FROM users WHERE id = $1 AND totp_enabled = true"
+    // Get ENCRYPTED TOTP secret from database
+    let totp_secret_encrypted: Option<String> = sqlx::query_scalar(
+        "SELECT totp_secret_encrypted FROM users WHERE id = $1 AND totp_enabled = true"
     )
         .bind(pending.user_id)
         .fetch_optional(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    let secret = match totp_secret {
+    let encrypted_secret = match totp_secret_encrypted {
         Some(s) => s,
         None => {
             state.pending_2fa.write().await.remove(&req.temp_session_id);
@@ -942,7 +944,23 @@ async fn verify_2fa_login(
         }
     };
     
-    // Verify TOTP code
+    // Decrypt TOTP secret using user's password
+    let secret = match crypto::decrypt_totp_secret(&encrypted_secret, &pending.password) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to decrypt TOTP secret: {}", e);
+            state.pending_2fa.write().await.remove(&req.temp_session_id);
+            return Ok((HeaderMap::new(), Json(LoginResponse {
+                success: false,
+                user_type: None,
+                message: Some("Failed to verify 2FA".to_string()),
+                requires_2fa: None,
+                temp_session_id: None,
+            })));
+        }
+    };
+    
+    // Verify TOTP code using temporarily decrypted secret
     let code_valid = twofa::verify_totp_code(&secret, &req.totp_code);
     
     // Check brute-force protection
@@ -1192,9 +1210,17 @@ async fn enable_2fa(
         }));
     }
     
-    // Enable 2FA with SERVER's secret
-    sqlx::query("UPDATE users SET totp_secret = $1, totp_enabled = true, totp_enabled_at = NOW() WHERE id = $2")
-        .bind(&pending.secret)
+    // Encrypt TOTP secret with user's password before storing
+    let user_id_str = auth_state.user_id.to_string();
+    let encrypted_secret = crypto::encrypt_totp_secret(&pending.secret, &req.password, &user_id_str)
+        .map_err(|e| {
+            log::error!("Failed to encrypt TOTP secret: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    // Enable 2FA with ENCRYPTED secret
+    sqlx::query("UPDATE users SET totp_secret_encrypted = $1, totp_enabled = true, totp_enabled_at = NOW() WHERE id = $2")
+        .bind(&encrypted_secret)
         .bind(auth_state.user_id)
         .execute(&state.db)
         .await
@@ -1241,15 +1267,15 @@ async fn disable_2fa(
         }));
     }
     
-    // Get current 2FA status and secret
-    let row = sqlx::query("SELECT totp_enabled, totp_secret, password_hash FROM users WHERE id = $1")
+    // Get current 2FA status and encrypted secret
+    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted, password_hash FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     let totp_enabled: bool = row.get("totp_enabled");
-    let totp_secret: Option<String> = row.get("totp_secret");
+    let totp_secret_encrypted: Option<String> = row.get("totp_secret_encrypted");
     let password_hash: String = row.get("password_hash");
     
     if !totp_enabled {
@@ -1259,7 +1285,7 @@ async fn disable_2fa(
         }));
     }
     
-    let secret = totp_secret.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let encrypted_secret = totp_secret_encrypted.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     
     // Verify password
     let password_valid = verify_password(&req.password, &password_hash).await.unwrap_or(false);
@@ -1270,6 +1296,18 @@ async fn disable_2fa(
         }));
     }
     
+    // Decrypt TOTP secret to verify code
+    let secret = match crypto::decrypt_totp_secret(&encrypted_secret, &req.password) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to decrypt TOTP secret: {}", e);
+            return Ok(Json(Disable2FAResponse {
+                success: false,
+                message: Some("Failed to verify 2FA".to_string()),
+            }));
+        }
+    };
+    
     // Verify TOTP code
     if !twofa::verify_totp_code(&secret, &req.totp_code) {
         return Ok(Json(Disable2FAResponse {
@@ -1279,7 +1317,7 @@ async fn disable_2fa(
     }
     
     // Disable 2FA
-    sqlx::query("UPDATE users SET totp_secret = NULL, totp_enabled = false, totp_enabled_at = NULL WHERE id = $1")
+    sqlx::query("UPDATE users SET totp_secret_encrypted = NULL, totp_enabled = false, totp_enabled_at = NULL WHERE id = $1")
         .bind(auth_state.user_id)
         .execute(&state.db)
         .await

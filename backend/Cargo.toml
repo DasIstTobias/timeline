@@ -16,6 +16,8 @@ chrono = { version = "0.4", features = ["serde"] }
 bcrypt = "0.15"
 rand = "0.8"
 aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", features = ["simple"] }
+sha2 = "0.10"
 base64 = "0.22"
 cookie = "0.18"
 env_logger = "0.11"
