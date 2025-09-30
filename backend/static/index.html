@@ -624,51 +624,38 @@
         </div>
     </div>
 
-    <!-- Enable 2FA Overlay - Step 2: QR Code -->
+    <!-- Enable 2FA Overlay - Step 2: QR Code and Confirmation -->
     <div id="enable-2fa-step2-overlay" class="overlay" style="display: none;">
         <div class="overlay-content">
             <div class="overlay-header">
-                <h2>Scan QR Code</h2>
+                <h2>Set Up Two-Factor Authentication</h2>
                 <button class="close-overlay" id="close-enable-2fa-step2">&times;</button>
             </div>
-            <div class="twofa-qr-content">
-                <p>Scan this QR code with your authenticator app (e.g., Google Authenticator, Authy, Microsoft Authenticator):</p>
-                <div class="qr-code-container">
-                    <canvas id="twofa-qr-code"></canvas>
-                </div>
-                <div class="totp-secret-container">
-                    <p><strong>Manual Entry Key:</strong></p>
-                    <code id="totp-secret-display">Loading...</code>
+            <div class="twofa-setup-content">
+                <div class="twofa-section">
+                    <h3>Scan QR Code</h3>
+                    <p>Scan this QR code with your authenticator app (e.g., Google Authenticator, Authy, Microsoft Authenticator):</p>
+                    <div class="qr-code-container">
+                        <canvas id="twofa-qr-code"></canvas>
+                    </div>
+                    <div class="totp-secret-container">
+                        <p><strong>Manual Entry Key:</strong></p>
+                        <code id="totp-secret-display">Loading...</code>
+                    </div>
                 </div>
                 <form id="enable-2fa-step2-form">
-                    <div class="form-group">
-                        <label for="verify-totp-code">Enter the 6-digit code from your app:</label>
-                        <input type="text" id="verify-totp-code" pattern="[0-9]{6}" maxlength="6" required autocomplete="off" inputmode="numeric">
+                    <div class="twofa-section">
+                        <h3>Verify and Confirm</h3>
+                        <div class="form-group">
+                            <label for="verify-totp-code">Enter the 6-digit code from your app:</label>
+                            <input type="text" id="verify-totp-code" pattern="[0-9]{6}" maxlength="6" required autocomplete="off" inputmode="numeric">
+                        </div>
+                        <div class="form-group">
+                            <label for="enable-2fa-password">Enter your password to confirm:</label>
+                            <input type="password" id="enable-2fa-password" required autocomplete="current-password">
+                        </div>
                     </div>
                     <div id="enable-2fa-step2-error" class="error-message" style="display: none;"></div>
-                    <div class="form-actions">
-                        <button type="submit" class="primary-btn">Continue</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <!-- Enable 2FA Overlay - Step 3: Password Confirmation -->
-    <div id="enable-2fa-step3-overlay" class="overlay" style="display: none;">
-        <div class="overlay-content">
-            <div class="overlay-header">
-                <h2>Confirm Password</h2>
-                <button class="close-overlay" id="close-enable-2fa-step3">&times;</button>
-            </div>
-            <div class="twofa-password-content">
-                <p>Please enter your password to enable Two-Factor Authentication:</p>
-                <form id="enable-2fa-step3-form">
-                    <div class="form-group">
-                        <label for="enable-2fa-password">Password:</label>
-                        <input type="password" id="enable-2fa-password" required autocomplete="current-password">
-                    </div>
-                    <div id="enable-2fa-step3-error" class="error-message" style="display: none;"></div>
                     <div class="form-actions">
                         <button type="submit" class="primary-btn">Enable 2FA</button>
                     </div>
@@ -677,45 +664,30 @@
         </div>
     </div>
 
-    <!-- Disable 2FA Overlay - Step 1: Verify Code -->
-    <div id="disable-2fa-step1-overlay" class="overlay" style="display: none;">
+    <!-- Disable 2FA Overlay -->
+    <div id="disable-2fa-overlay" class="overlay" style="display: none;">
         <div class="overlay-content">
             <div class="overlay-header">
                 <h2>Disable Two-Factor Authentication</h2>
-                <button class="close-overlay" id="close-disable-2fa-step1">&times;</button>
+                <button class="close-overlay" id="close-disable-2fa">&times;</button>
             </div>
-            <div class="twofa-verify-content">
-                <p>Please enter your current 2FA code to continue:</p>
-                <form id="disable-2fa-step1-form">
-                    <div class="form-group">
-                        <label for="disable-verify-totp-code">2FA Code:</label>
-                        <input type="text" id="disable-verify-totp-code" pattern="[0-9]{6}" maxlength="6" required autocomplete="off" inputmode="numeric">
+            <div class="twofa-disable-content">
+                <div class="twofa-section">
+                    <p><strong>Warning:</strong> You are about to disable Two-Factor Authentication for your account.</p>
+                    <p>Your account will be less secure without 2FA enabled.</p>
+                </div>
+                <form id="disable-2fa-form">
+                    <div class="twofa-section">
+                        <div class="form-group">
+                            <label for="disable-verify-totp-code">Enter your current 2FA code:</label>
+                            <input type="text" id="disable-verify-totp-code" pattern="[0-9]{6}" maxlength="6" required autocomplete="off" inputmode="numeric">
+                        </div>
+                        <div class="form-group">
+                            <label for="disable-2fa-password">Enter your password to confirm:</label>
+                            <input type="password" id="disable-2fa-password" required autocomplete="current-password">
+                        </div>
                     </div>
-                    <div id="disable-2fa-step1-error" class="error-message" style="display: none;"></div>
-                    <div class="form-actions">
-                        <button type="submit" class="primary-btn">Continue</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <!-- Disable 2FA Overlay - Step 2: Password Confirmation -->
-    <div id="disable-2fa-step2-overlay" class="overlay" style="display: none;">
-        <div class="overlay-content">
-            <div class="overlay-header">
-                <h2>Confirm Disable 2FA</h2>
-                <button class="close-overlay" id="close-disable-2fa-step2">&times;</button>
-            </div>
-            <div class="twofa-disable-confirm-content">
-                <p><strong>Warning:</strong> You are about to disable Two-Factor Authentication for your account.</p>
-                <p>Your account will be less secure without 2FA enabled.</p>
-                <form id="disable-2fa-step2-form">
-                    <div class="form-group">
-                        <label for="disable-2fa-password">Password:</label>
-                        <input type="password" id="disable-2fa-password" required autocomplete="current-password">
-                    </div>
-                    <div id="disable-2fa-step2-error" class="error-message" style="display: none;"></div>
+                    <div id="disable-2fa-error" class="error-message" style="display: none;"></div>
                     <div class="form-actions">
                         <button type="submit" class="primary-btn">Disable 2FA</button>
                     </div>

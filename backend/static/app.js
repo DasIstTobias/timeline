@@ -19,7 +19,6 @@ class TimelineApp {
         this.notesAutosaveTimer = null;
         this.temp2FASessionId = null; // For 2FA login flow
         this.temp2FASecret = null; // Temporarily store TOTP secret during setup
-        this.temp2FACode = null; // Temporarily store verified TOTP code
         
         this.init();
     }
@@ -104,10 +103,8 @@ class TimelineApp {
         document.getElementById('enable-2fa-btn').addEventListener('click', () => this.startEnable2FA());
         document.getElementById('disable-2fa-btn').addEventListener('click', () => this.startDisable2FA());
         document.getElementById('enable-2fa-step1-ok').addEventListener('click', () => this.continueEnable2FAStep1());
-        document.getElementById('enable-2fa-step2-form').addEventListener('submit', (e) => this.continueEnable2FAStep2(e));
-        document.getElementById('enable-2fa-step3-form').addEventListener('submit', (e) => this.finishEnable2FA(e));
-        document.getElementById('disable-2fa-step1-form').addEventListener('submit', (e) => this.continueDisable2FAStep1(e));
-        document.getElementById('disable-2fa-step2-form').addEventListener('submit', (e) => this.finishDisable2FA(e));
+        document.getElementById('enable-2fa-step2-form').addEventListener('submit', (e) => this.finishEnable2FA(e));
+        document.getElementById('disable-2fa-form').addEventListener('submit', (e) => this.finishDisable2FA(e));
         
         // Click outside to close menus
         document.addEventListener('click', (e) => this.handleOutsideClick(e));
@@ -1964,6 +1961,7 @@ class TimelineApp {
                 
                 // Show step 2 overlay
                 document.getElementById('verify-totp-code').value = '';
+                document.getElementById('enable-2fa-password').value = '';
                 document.getElementById('enable-2fa-step2-error').style.display = 'none';
                 this.showOverlay('enable-2fa-step2-overlay');
             } else {
@@ -1974,40 +1972,20 @@ class TimelineApp {
         }
     }
 
-    async continueEnable2FAStep2(e) {
+    async finishEnable2FA(e) {
         e.preventDefault();
         
         const totpCode = document.getElementById('verify-totp-code').value;
+        const password = document.getElementById('enable-2fa-password').value;
         
-        // Verify the code on the backend
         if (!this.temp2FASecret) {
             this.showElementError('enable-2fa-step2-error', 'Session expired. Please try again.');
             return;
         }
         
-        // Simple client-side validation
+        // Validate TOTP code
         if (totpCode.length !== 6 || !/^\d{6}$/.test(totpCode)) {
             this.showElementError('enable-2fa-step2-error', 'Please enter a valid 6-digit code.');
-            return;
-        }
-        
-        // Store the code temporarily
-        this.temp2FACode = totpCode;
-        
-        // Close step 2, show step 3
-        this.closeOverlay(document.getElementById('enable-2fa-step2-overlay'));
-        document.getElementById('enable-2fa-password').value = '';
-        document.getElementById('enable-2fa-step3-error').style.display = 'none';
-        this.showOverlay('enable-2fa-step3-overlay');
-    }
-
-    async finishEnable2FA(e) {
-        e.preventDefault();
-        
-        const password = document.getElementById('enable-2fa-password').value;
-        
-        if (!this.temp2FASecret || !this.temp2FACode) {
-            this.showElementError('enable-2fa-step3-error', 'Session expired. Please try again.');
             return;
         }
         
@@ -2019,7 +1997,7 @@ class TimelineApp {
                 },
                 body: JSON.stringify({
                     secret: this.temp2FASecret,
-                    totp_code: this.temp2FACode,
+                    totp_code: totpCode,
                     password: password
                 }),
                 credentials: 'include'
@@ -2030,7 +2008,6 @@ class TimelineApp {
             if (data.success) {
                 // Clear temporary data
                 this.temp2FASecret = null;
-                this.temp2FACode = null;
                 
                 // Clear QR code
                 const canvas = document.getElementById('twofa-qr-code');
@@ -2038,7 +2015,7 @@ class TimelineApp {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 
                 // Close overlay
-                this.closeOverlay(document.getElementById('enable-2fa-step3-overlay'));
+                this.closeOverlay(document.getElementById('enable-2fa-step2-overlay'));
                 
                 // Show success message
                 this.showSuccess('2FA Enabled', 'Two-Factor Authentication has been successfully enabled for your account.');
@@ -2046,50 +2023,32 @@ class TimelineApp {
                 // Reload 2FA status in settings
                 this.load2FAStatus();
             } else {
-                this.showElementError('enable-2fa-step3-error', data.message || 'Failed to enable 2FA');
+                this.showElementError('enable-2fa-step2-error', data.message || 'Failed to enable 2FA');
             }
         } catch (error) {
-            this.showElementError('enable-2fa-step3-error', 'Network error. Please try again.');
+            this.showElementError('enable-2fa-step2-error', 'Network error. Please try again.');
         }
     }
 
     startDisable2FA() {
         // Close settings overlay
         this.closeOverlay(document.getElementById('settings-overlay'));
-        // Show step 1: verify code
+        // Show disable overlay
         document.getElementById('disable-verify-totp-code').value = '';
-        document.getElementById('disable-2fa-step1-error').style.display = 'none';
-        this.showOverlay('disable-2fa-step1-overlay');
-    }
-
-    async continueDisable2FAStep1(e) {
-        e.preventDefault();
-        
-        const totpCode = document.getElementById('disable-verify-totp-code').value;
-        
-        // Simple client-side validation
-        if (totpCode.length !== 6 || !/^\d{6}$/.test(totpCode)) {
-            this.showElementError('disable-2fa-step1-error', 'Please enter a valid 6-digit code.');
-            return;
-        }
-        
-        // Store the code temporarily for step 2
-        this.temp2FACode = totpCode;
-        
-        // Close step 1, show step 2
-        this.closeOverlay(document.getElementById('disable-2fa-step1-overlay'));
         document.getElementById('disable-2fa-password').value = '';
-        document.getElementById('disable-2fa-step2-error').style.display = 'none';
-        this.showOverlay('disable-2fa-step2-overlay');
+        document.getElementById('disable-2fa-error').style.display = 'none';
+        this.showOverlay('disable-2fa-overlay');
     }
 
     async finishDisable2FA(e) {
         e.preventDefault();
         
+        const totpCode = document.getElementById('disable-verify-totp-code').value;
         const password = document.getElementById('disable-2fa-password').value;
         
-        if (!this.temp2FACode) {
-            this.showElementError('disable-2fa-step2-error', 'Session expired. Please try again.');
+        // Validate TOTP code
+        if (totpCode.length !== 6 || !/^\d{6}$/.test(totpCode)) {
+            this.showElementError('disable-2fa-error', 'Please enter a valid 6-digit code.');
             return;
         }
         
@@ -2100,7 +2059,7 @@ class TimelineApp {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    totp_code: this.temp2FACode,
+                    totp_code: totpCode,
                     password: password
                 }),
                 credentials: 'include'
@@ -2109,11 +2068,8 @@ class TimelineApp {
             const data = await response.json();
             
             if (data.success) {
-                // Clear temporary data
-                this.temp2FACode = null;
-                
                 // Close overlay
-                this.closeOverlay(document.getElementById('disable-2fa-step2-overlay'));
+                this.closeOverlay(document.getElementById('disable-2fa-overlay'));
                 
                 // Show success message
                 this.showSuccess('2FA Disabled', 'Two-Factor Authentication has been disabled for your account.');
@@ -2121,10 +2077,10 @@ class TimelineApp {
                 // Reload 2FA status in settings
                 this.load2FAStatus();
             } else {
-                this.showElementError('disable-2fa-step2-error', data.message || 'Failed to disable 2FA');
+                this.showElementError('disable-2fa-error', data.message || 'Failed to disable 2FA');
             }
         } catch (error) {
-            this.showElementError('disable-2fa-step2-error', 'Network error. Please try again.');
+            this.showElementError('disable-2fa-error', 'Network error. Please try again.');
         }
     }
 }
