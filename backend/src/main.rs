@@ -16,9 +16,11 @@ use regex::Regex;
 mod auth;
 mod crypto;
 mod models;
+mod twofa;
 
 use auth::{create_session, verify_session};
 use crypto::{generate_random_password, hash_password, verify_password};
+use twofa::TwoFABruteForceProtection;
 
 // Helper function to validate input strings for null bytes and control characters
 fn validate_input_string(input: &str, max_length: Option<usize>) -> Result<(), String> {
@@ -50,6 +52,18 @@ type AppState = Arc<AppData>;
 struct AppData {
     db: PgPool,
     sessions: Arc<RwLock<HashMap<String, Uuid>>>, // session_id -> user_id
+    pending_2fa: Arc<RwLock<HashMap<String, Pending2FAAuth>>>, // temp_session_id -> pending auth
+    twofa_protection: Arc<TwoFABruteForceProtection>,
+}
+
+// Temporary authentication state while waiting for 2FA
+#[derive(Clone)]
+struct Pending2FAAuth {
+    user_id: Uuid,
+    username: String,
+    is_admin: bool,
+    remember_me: bool,
+    created_at: std::time::SystemTime,
 }
 
 #[tokio::main]
@@ -77,11 +91,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_state = AppState::new(AppData {
         db,
         sessions: Arc::new(RwLock::new(HashMap::new())),
+        pending_2fa: Arc::new(RwLock::new(HashMap::new())),
+        twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
     });
     
     let app = Router::new()
         .route("/", get(serve_index))
         .route("/api/login", post(login))
+        .route("/api/verify-2fa", post(verify_2fa_login))
         .route("/api/logout", post(logout))
         .route("/api/user-info", get(get_user_info))
         .route("/api/register", post(register))
@@ -97,6 +114,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/settings", get(get_settings))
         .route("/api/settings", post(save_settings))
         .route("/api/notes", get(get_notes))
+        .route("/api/notes", post(save_notes))
+        .route("/api/2fa/status", get(get_2fa_status))
+        .route("/api/2fa/setup", post(setup_2fa))
+        .route("/api/2fa/enable", post(enable_2fa))
+        .route("/api/2fa/disable", post(disable_2fa))
         .route("/api/notes", post(save_notes))
         .nest_service("/static", ServeDir::new("static"))
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024)) // 2MB limit
@@ -141,6 +163,8 @@ struct LoginResponse {
     success: bool,
     user_type: Option<String>, // "admin" or "user"
     message: Option<String>,
+    requires_2fa: Option<bool>, // true if 2FA verification is needed
+    temp_session_id: Option<String>, // temporary session ID for 2FA verification
 }
 
 async fn login(
@@ -161,15 +185,18 @@ async fn login(
             success: false,
             user_type: None,
             message: Some("Invalid credentials".to_string()),
+            requires_2fa: None,
+            temp_session_id: None,
         })));
     }
     
-    let user_row = sqlx::query("SELECT id, username, password_hash, is_admin FROM users WHERE username = $1")
+    let user_row = sqlx::query("SELECT id, username, password_hash, is_admin, totp_enabled FROM users WHERE username = $1")
         .bind(&req.username)
         .fetch_optional(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
+    let mut totp_enabled = false;
     if let Some(row) = user_row {
         let stored_hash: String = row.get("password_hash");
         password_to_verify = stored_hash;
@@ -177,6 +204,7 @@ async fn login(
         let user_id: Uuid = row.get("id");
         let username: String = row.get("username");
         let is_admin: bool = row.get("is_admin");
+        totp_enabled = row.get::<bool, _>("totp_enabled");
         user_data = Some((user_id, username, is_admin));
     }
     
@@ -184,7 +212,31 @@ async fn login(
     let password_valid = verify_password(&req.password, &password_to_verify).await.unwrap_or(false);
     
     if is_valid_user && password_valid {
-        if let Some((user_id, _username, is_admin)) = user_data {
+        if let Some((user_id, username, is_admin)) = user_data {
+            // Check if user has 2FA enabled (only for non-admin users)
+            if !is_admin && totp_enabled {
+                // Create a temporary pending 2FA session
+                let temp_session_id = uuid::Uuid::new_v4().to_string();
+                
+                state.pending_2fa.write().await.insert(temp_session_id.clone(), Pending2FAAuth {
+                    user_id,
+                    username: username.clone(),
+                    is_admin,
+                    remember_me: req.remember_me.unwrap_or(false),
+                    created_at: std::time::SystemTime::now(),
+                });
+                
+                // Return success but indicate 2FA is required
+                return Ok((HeaderMap::new(), Json(LoginResponse {
+                    success: true,
+                    user_type: Some("user".to_string()),
+                    message: None,
+                    requires_2fa: Some(true),
+                    temp_session_id: Some(temp_session_id),
+                })));
+            }
+            
+            // No 2FA required or admin user - create full session
             let session_id = create_session(user_id, &state.sessions).await;
             
             let mut headers = HeaderMap::new();
@@ -201,6 +253,8 @@ async fn login(
                 success: true,
                 user_type: Some(if is_admin { "admin".to_string() } else { "user".to_string() }),
                 message: None,
+                requires_2fa: None,
+                temp_session_id: None,
             })));
         }
     }
@@ -209,6 +263,8 @@ async fn login(
         success: false,
         user_type: None,
         message: Some("Invalid credentials".to_string()),
+        requires_2fa: None,
+        temp_session_id: None,
     })))
 }
 
@@ -790,4 +846,387 @@ async fn save_notes(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     Ok(Json(serde_json::json!({"success": true})))
+}
+// 2FA Endpoints
+
+#[derive(Deserialize)]
+struct Verify2FALoginRequest {
+    temp_session_id: String,
+    totp_code: String,
+}
+
+async fn verify_2fa_login(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<Verify2FALoginRequest>,
+) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
+    // Get client identifier for brute-force protection (use IP address)
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    
+    // Validate TOTP code format (6 digits)
+    if req.totp_code.len() != 6 || !req.totp_code.chars().all(|c| c.is_ascii_digit()) {
+        return Ok((HeaderMap::new(), Json(LoginResponse {
+            success: false,
+            user_type: None,
+            message: Some("Invalid 2FA code format".to_string()),
+            requires_2fa: None,
+            temp_session_id: None,
+        })));
+    }
+    
+    // Get pending 2FA auth
+    let pending_auth = {
+        let pending_map = state.pending_2fa.read().await;
+        pending_map.get(&req.temp_session_id).cloned()
+    };
+    
+    let pending = match pending_auth {
+        Some(p) => p,
+        None => {
+            return Ok((HeaderMap::new(), Json(LoginResponse {
+                success: false,
+                user_type: None,
+                message: Some("Invalid or expired session".to_string()),
+                requires_2fa: None,
+                temp_session_id: None,
+            })));
+        }
+    };
+    
+    // Check if pending session is too old (5 minutes max)
+    if let Ok(elapsed) = pending.created_at.elapsed() {
+        if elapsed > std::time::Duration::from_secs(300) {
+            state.pending_2fa.write().await.remove(&req.temp_session_id);
+            return Ok((HeaderMap::new(), Json(LoginResponse {
+                success: false,
+                user_type: None,
+                message: Some("Session expired".to_string()),
+                requires_2fa: None,
+                temp_session_id: None,
+            })));
+        }
+    }
+    
+    // Get TOTP secret from database
+    let totp_secret: Option<String> = sqlx::query_scalar(
+        "SELECT totp_secret FROM users WHERE id = $1 AND totp_enabled = true"
+    )
+        .bind(pending.user_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let secret = match totp_secret {
+        Some(s) => s,
+        None => {
+            state.pending_2fa.write().await.remove(&req.temp_session_id);
+            return Ok((HeaderMap::new(), Json(LoginResponse {
+                success: false,
+                user_type: None,
+                message: Some("2FA not properly configured".to_string()),
+                requires_2fa: None,
+                temp_session_id: None,
+            })));
+        }
+    };
+    
+    // Verify TOTP code
+    let code_valid = twofa::verify_totp_code(&secret, &req.totp_code);
+    
+    // Check brute-force protection
+    if let Err(msg) = state.twofa_protection.check_and_update(&client_ip, code_valid).await {
+        return Ok((HeaderMap::new(), Json(LoginResponse {
+            success: false,
+            user_type: None,
+            message: Some(msg),
+            requires_2fa: None,
+            temp_session_id: None,
+        })));
+    }
+    
+    if !code_valid {
+        return Ok((HeaderMap::new(), Json(LoginResponse {
+            success: false,
+            user_type: None,
+            message: Some("Invalid 2FA code".to_string()),
+            requires_2fa: None,
+            temp_session_id: None,
+        })));
+    }
+    
+    // 2FA verification successful - remove pending session and create real session
+    state.pending_2fa.write().await.remove(&req.temp_session_id);
+    let session_id = create_session(pending.user_id, &state.sessions).await;
+    
+    let mut response_headers = HeaderMap::new();
+    let cookie_value = if pending.remember_me {
+        format!("session_id={}; HttpOnly; Path=/; Max-Age=86400; SameSite=Strict", session_id)
+    } else {
+        format!("session_id={}; HttpOnly; Path=/; SameSite=Strict", session_id)
+    };
+    response_headers.insert(header::SET_COOKIE, cookie_value.parse().unwrap());
+    
+    Ok((response_headers, Json(LoginResponse {
+        success: true,
+        user_type: Some("user".to_string()),
+        message: None,
+        requires_2fa: None,
+        temp_session_id: None,
+    })))
+}
+
+#[derive(Serialize)]
+struct TwoFAStatusResponse {
+    enabled: bool,
+    enabled_at: Option<String>,
+}
+
+async fn get_2fa_status(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<TwoFAStatusResponse>, StatusCode> {
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    let row = sqlx::query("SELECT totp_enabled, totp_enabled_at FROM users WHERE id = $1")
+        .bind(auth_state.user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let enabled: bool = row.get("totp_enabled");
+    let enabled_at: Option<chrono::DateTime<chrono::Utc>> = row.get("totp_enabled_at");
+    
+    Ok(Json(TwoFAStatusResponse {
+        enabled,
+        enabled_at: enabled_at.map(|dt| dt.to_rfc3339()),
+    }))
+}
+
+#[derive(Serialize)]
+struct Setup2FAResponse {
+    success: bool,
+    secret: Option<String>,
+    qr_uri: Option<String>,
+    message: Option<String>,
+}
+
+async fn setup_2fa(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<Setup2FAResponse>, StatusCode> {
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Check if 2FA is already enabled
+    let already_enabled: bool = sqlx::query_scalar("SELECT totp_enabled FROM users WHERE id = $1")
+        .bind(auth_state.user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    if already_enabled {
+        return Ok(Json(Setup2FAResponse {
+            success: false,
+            secret: None,
+            qr_uri: None,
+            message: Some("2FA is already enabled".to_string()),
+        }));
+    }
+    
+    // Generate new TOTP secret
+    let secret = twofa::generate_totp_secret();
+    let qr_uri = twofa::generate_totp_uri(&secret, &auth_state.username, "Timeline");
+    
+    Ok(Json(Setup2FAResponse {
+        success: true,
+        secret: Some(secret),
+        qr_uri: Some(qr_uri),
+        message: None,
+    }))
+}
+
+#[derive(Deserialize)]
+struct Enable2FARequest {
+    secret: String,
+    totp_code: String,
+    password: String,
+}
+
+#[derive(Serialize)]
+struct Enable2FAResponse {
+    success: bool,
+    message: Option<String>,
+}
+
+async fn enable_2fa(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<Enable2FARequest>,
+) -> Result<Json<Enable2FAResponse>, StatusCode> {
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Validate inputs
+    if let Err(msg) = validate_input_string(&req.secret, Some(100)) {
+        return Ok(Json(Enable2FAResponse {
+            success: false,
+            message: Some(format!("Invalid secret: {}", msg)),
+        }));
+    }
+    
+    if req.totp_code.len() != 6 || !req.totp_code.chars().all(|c| c.is_ascii_digit()) {
+        return Ok(Json(Enable2FAResponse {
+            success: false,
+            message: Some("Invalid 2FA code format".to_string()),
+        }));
+    }
+    
+    // Check if 2FA is already enabled
+    let already_enabled: bool = sqlx::query_scalar("SELECT totp_enabled FROM users WHERE id = $1")
+        .bind(auth_state.user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    if already_enabled {
+        return Ok(Json(Enable2FAResponse {
+            success: false,
+            message: Some("2FA is already enabled".to_string()),
+        }));
+    }
+    
+    // Verify password
+    let password_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+        .bind(auth_state.user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let password_valid = verify_password(&req.password, &password_hash).await.unwrap_or(false);
+    if !password_valid {
+        return Ok(Json(Enable2FAResponse {
+            success: false,
+            message: Some("Invalid password".to_string()),
+        }));
+    }
+    
+    // Verify TOTP code
+    if !twofa::verify_totp_code(&req.secret, &req.totp_code) {
+        return Ok(Json(Enable2FAResponse {
+            success: false,
+            message: Some("Invalid 2FA code".to_string()),
+        }));
+    }
+    
+    // Enable 2FA
+    sqlx::query("UPDATE users SET totp_secret = $1, totp_enabled = true, totp_enabled_at = NOW() WHERE id = $2")
+        .bind(&req.secret)
+        .bind(auth_state.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(Json(Enable2FAResponse {
+        success: true,
+        message: None,
+    }))
+}
+
+#[derive(Deserialize)]
+struct Disable2FARequest {
+    totp_code: String,
+    password: String,
+}
+
+#[derive(Serialize)]
+struct Disable2FAResponse {
+    success: bool,
+    message: Option<String>,
+}
+
+async fn disable_2fa(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<Disable2FARequest>,
+) -> Result<Json<Disable2FAResponse>, StatusCode> {
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Validate TOTP code format
+    if req.totp_code.len() != 6 || !req.totp_code.chars().all(|c| c.is_ascii_digit()) {
+        return Ok(Json(Disable2FAResponse {
+            success: false,
+            message: Some("Invalid 2FA code format".to_string()),
+        }));
+    }
+    
+    // Get current 2FA status and secret
+    let row = sqlx::query("SELECT totp_enabled, totp_secret, password_hash FROM users WHERE id = $1")
+        .bind(auth_state.user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let totp_enabled: bool = row.get("totp_enabled");
+    let totp_secret: Option<String> = row.get("totp_secret");
+    let password_hash: String = row.get("password_hash");
+    
+    if !totp_enabled {
+        return Ok(Json(Disable2FAResponse {
+            success: false,
+            message: Some("2FA is not enabled".to_string()),
+        }));
+    }
+    
+    let secret = totp_secret.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Verify password
+    let password_valid = verify_password(&req.password, &password_hash).await.unwrap_or(false);
+    if !password_valid {
+        return Ok(Json(Disable2FAResponse {
+            success: false,
+            message: Some("Invalid password".to_string()),
+        }));
+    }
+    
+    // Verify TOTP code
+    if !twofa::verify_totp_code(&secret, &req.totp_code) {
+        return Ok(Json(Disable2FAResponse {
+            success: false,
+            message: Some("Invalid 2FA code".to_string()),
+        }));
+    }
+    
+    // Disable 2FA
+    sqlx::query("UPDATE users SET totp_secret = NULL, totp_enabled = false, totp_enabled_at = NULL WHERE id = $1")
+        .bind(auth_state.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(Json(Disable2FAResponse {
+        success: true,
+        message: None,
+    }))
 }
