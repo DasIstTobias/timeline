@@ -1891,44 +1891,50 @@ class TimelineApp {
     }
 
     async load2FAStatus() {
+        const statusText = document.getElementById('twofa-status-text');
+        const enableBtn = document.getElementById('enable-2fa-btn');
+        const disableBtn = document.getElementById('disable-2fa-btn');
+        
         try {
             const response = await fetch('/api/2fa/status', {
                 method: 'GET',
                 credentials: 'include'
             });
             
-            const statusText = document.getElementById('twofa-status-text');
-            const enableBtn = document.getElementById('enable-2fa-btn');
-            const disableBtn = document.getElementById('disable-2fa-btn');
-            
             if (response.ok) {
-                const data = await response.json();
-                
-                if (data.enabled) {
-                    const enabledDate = new Date(data.enabled_at);
-                    const formattedDate = this.formatDateForDisplay(enabledDate);
-                    const formattedTime = this.formatTimeForDisplay(enabledDate);
-                    statusText.textContent = `2FA is enabled. Activated on ${formattedDate} at ${formattedTime}.`;
-                    enableBtn.style.display = 'none';
-                    disableBtn.style.display = 'inline-block';
-                } else {
+                try {
+                    const data = await response.json();
+                    
+                    if (data.enabled) {
+                        const enabledDate = new Date(data.enabled_at);
+                        const formattedDate = this.formatDateForDisplay(enabledDate);
+                        const formattedTime = this.formatTimeForDisplay(enabledDate);
+                        statusText.textContent = `2FA is enabled. Activated on ${formattedDate} at ${formattedTime}.`;
+                        enableBtn.style.display = 'none';
+                        disableBtn.style.display = 'inline-block';
+                    } else {
+                        statusText.textContent = '2FA is currently disabled.';
+                        enableBtn.style.display = 'inline-block';
+                        disableBtn.style.display = 'none';
+                    }
+                } catch (jsonError) {
+                    console.error('Error parsing 2FA status JSON:', jsonError);
+                    // Failed to parse JSON, default to disabled
                     statusText.textContent = '2FA is currently disabled.';
                     enableBtn.style.display = 'inline-block';
                     disableBtn.style.display = 'none';
                 }
             } else {
                 // If the request failed, show an error but still show the enable button
+                console.error('2FA status request failed with status:', response.status);
                 statusText.textContent = '2FA is currently disabled.';
                 enableBtn.style.display = 'inline-block';
                 disableBtn.style.display = 'none';
             }
         } catch (error) {
             console.error('Error loading 2FA status:', error);
-            // On error, default to showing the enable button
-            const statusText = document.getElementById('twofa-status-text');
-            const enableBtn = document.getElementById('enable-2fa-btn');
-            const disableBtn = document.getElementById('disable-2fa-btn');
-            statusText.textContent = 'Error loading 2FA status. Please refresh the page.';
+            // On network error, default to showing the enable button
+            statusText.textContent = '2FA is currently disabled.';
             enableBtn.style.display = 'inline-block';
             disableBtn.style.display = 'none';
         }
