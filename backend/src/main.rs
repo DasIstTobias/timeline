@@ -119,7 +119,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/2fa/setup", post(setup_2fa))
         .route("/api/2fa/enable", post(enable_2fa))
         .route("/api/2fa/disable", post(disable_2fa))
-        .route("/api/notes", post(save_notes))
         .nest_service("/static", ServeDir::new("static"))
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024)) // 2MB limit
         .layer(CorsLayer::permissive())
