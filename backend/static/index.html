@@ -21,6 +21,11 @@
                     <label for="password">Password:</label>
                     <input type="password" id="password" name="password" required>
                 </div>
+                <div class="form-group">
+                    <label for="totp-code-login">2FA Code (if enabled):</label>
+                    <input type="text" id="totp-code-login" name="totp_code" pattern="[0-9]{6}" maxlength="6" placeholder="Optional" autocomplete="one-time-code" inputmode="numeric">
+                    <small style="color: #666; font-size: 0.9em;">Leave empty if 2FA is not enabled</small>
+                </div>
                 <div class="form-group checkbox-group">
                     <label class="checkbox-label">
                         <input type="checkbox" id="remember-me" name="remember-me">
@@ -617,9 +622,16 @@
                 <p><strong>If you lose access to your 2FA device, you will permanently lose access to your account.</strong></p>
                 <p>Even the administrator cannot restore access if you lose your 2FA authentication method.</p>
                 <p>Please ensure you have a secure backup of your 2FA secret before enabling this feature.</p>
-                <div class="form-actions">
-                    <button id="enable-2fa-step1-ok" class="primary-btn">OK, I Understand</button>
-                </div>
+                <form id="enable-2fa-step1-form">
+                    <div class="form-group">
+                        <label for="enable-2fa-step1-password">Enter your password to continue:</label>
+                        <input type="password" id="enable-2fa-step1-password" required autocomplete="current-password">
+                    </div>
+                    <div id="enable-2fa-step1-error" class="error-message" style="display: none;"></div>
+                    <div class="form-actions">
+                        <button type="submit" class="primary-btn">Continue</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -649,10 +661,6 @@
                         <div class="form-group">
                             <label for="verify-totp-code">Enter the 6-digit code from your app:</label>
                             <input type="text" id="verify-totp-code" pattern="[0-9]{6}" maxlength="6" required autocomplete="off" inputmode="numeric">
-                        </div>
-                        <div class="form-group">
-                            <label for="enable-2fa-password">Enter your password to confirm:</label>
-                            <input type="password" id="enable-2fa-password" required autocomplete="current-password">
                         </div>
                     </div>
                     <div id="enable-2fa-step2-error" class="error-message" style="display: none;"></div>

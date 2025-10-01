@@ -19,6 +19,7 @@ class TimelineApp {
         this.notesAutosaveTimer = null;
         this.temp2FASessionId = null; // For 2FA login flow
         this.temp2FASecret = null; // Temporarily store TOTP secret during setup
+        this.temp2FAPassword = null; // Temporarily store password during 2FA setup
         
         this.init();
     }
@@ -102,7 +103,7 @@ class TimelineApp {
         document.getElementById('abort-2fa-login').addEventListener('click', () => this.abort2FALogin());
         document.getElementById('enable-2fa-btn').addEventListener('click', () => this.startEnable2FA());
         document.getElementById('disable-2fa-btn').addEventListener('click', () => this.startDisable2FA());
-        document.getElementById('enable-2fa-step1-ok').addEventListener('click', () => this.continueEnable2FAStep1());
+        document.getElementById('enable-2fa-step1-form').addEventListener('submit', (e) => this.continueEnable2FAStep1(e));
         document.getElementById('enable-2fa-step2-form').addEventListener('submit', (e) => this.finishEnable2FA(e));
         document.getElementById('disable-2fa-form').addEventListener('submit', (e) => this.finishDisable2FA(e));
         
@@ -138,34 +139,53 @@ class TimelineApp {
         
         const username = document.getElementById('username').value;
         const password = document.getElementById('password').value;
+        const totpCode = document.getElementById('totp-code-login').value.trim();
         const rememberMe = document.getElementById('remember-me').checked;
         
-        try {
-            const response = await fetch('/api/login', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ username, password, remember_me: rememberMe }),
-                credentials: 'include'
-            });
-            
-            const data = await response.json();
-            
-            if (data.success) {
-                // Store remember me preference for this session
-                localStorage.setItem('rememberMe', rememberMe.toString());
+        // If 2FA code is provided, attempt direct login with 2FA
+        if (totpCode) {
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, password, remember_me: rememberMe }),
+                    credentials: 'include'
+                });
                 
-                // Check if 2FA is required
+                const data = await response.json();
+                
                 if (data.requires_2fa && data.temp_session_id) {
-                    // Store temporary session ID and proceed to 2FA screen
-                    this.temp2FASessionId = data.temp_session_id;
-                    this.userPassword = password; // Store for later encryption
-                    this.currentUser = { username, is_admin: false };
-                    this.show2FALoginScreen();
-                } else {
-                    // No 2FA required - proceed normally
-                    this.userPassword = password; // Store for encryption
+                    // Now verify with 2FA code
+                    const verify2FAResponse = await fetch('/api/verify-2fa', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            temp_session_id: data.temp_session_id,
+                            totp_code: totpCode
+                        }),
+                        credentials: 'include'
+                    });
+                    
+                    const verify2FAData = await verify2FAResponse.json();
+                    
+                    if (verify2FAData.success) {
+                        // 2FA verification successful
+                        localStorage.setItem('rememberMe', rememberMe.toString());
+                        this.userPassword = password;
+                        this.currentUser = { username, is_admin: false };
+                        await this.loadUserData();
+                        this.showUserTimeline();
+                    } else {
+                        this.showElementError('login-error', verify2FAData.message || '2FA verification failed');
+                    }
+                } else if (data.success) {
+                    // No 2FA required but user provided code - ignore code and proceed
+                    localStorage.setItem('rememberMe', rememberMe.toString());
+                    this.userPassword = password;
                     this.currentUser = { username, is_admin: data.user_type === 'admin' };
                     
                     if (data.user_type === 'admin') {
@@ -174,12 +194,52 @@ class TimelineApp {
                         await this.loadUserData();
                         this.showUserTimeline();
                     }
+                } else {
+                    this.showElementError('login-error', data.message || 'Login failed');
                 }
-            } else {
-                this.showElementError('login-error', data.message || 'Login failed');
+            } catch (error) {
+                this.showElementError('login-error', 'Network error. Please try again.');
             }
-        } catch (error) {
-            this.showElementError('login-error', 'Network error. Please try again.');
+        } else {
+            // No 2FA code provided - proceed with normal login
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, password, remember_me: rememberMe }),
+                    credentials: 'include'
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Store remember me preference for this session
+                    localStorage.setItem('rememberMe', rememberMe.toString());
+                    
+                    // Check if 2FA is required
+                    if (data.requires_2fa && data.temp_session_id) {
+                        // Show error - user must provide 2FA code
+                        this.showElementError('login-error', '2FA verification required. Please enter your 6-digit code.');
+                    } else {
+                        // No 2FA required - proceed normally
+                        this.userPassword = password; // Store for encryption
+                        this.currentUser = { username, is_admin: data.user_type === 'admin' };
+                        
+                        if (data.user_type === 'admin') {
+                            this.showAdminDashboard();
+                        } else {
+                            await this.loadUserData();
+                            this.showUserTimeline();
+                        }
+                    }
+                } else {
+                    this.showElementError('login-error', data.message || 'Login failed');
+                }
+            } catch (error) {
+                this.showElementError('login-error', 'Network error. Please try again.');
+            }
         }
     }
 
@@ -1942,25 +2002,32 @@ class TimelineApp {
     startEnable2FA() {
         // Close settings overlay
         this.closeOverlay(document.getElementById('settings-overlay'));
-        // Show step 1: warning
+        // Clear previous inputs and errors
+        document.getElementById('enable-2fa-step1-password').value = '';
+        document.getElementById('enable-2fa-step1-error').style.display = 'none';
+        // Show step 1: warning with password input
         this.showOverlay('enable-2fa-step1-overlay');
     }
 
-    continueEnable2FAStep1() {
-        // Close step 1, prompt for password, then start step 2
-        this.closeOverlay(document.getElementById('enable-2fa-step1-overlay'));
+    continueEnable2FAStep1(e) {
+        e.preventDefault();
         
-        // Prompt for password
-        const password = prompt('Please enter your password to continue:');
+        // Get password from form
+        const password = document.getElementById('enable-2fa-step1-password').value;
         if (!password) {
-            // User cancelled
+            this.showElementError('enable-2fa-step1-error', 'Password is required.');
             return;
         }
         
+        // Close step 1 and start step 2
+        this.closeOverlay(document.getElementById('enable-2fa-step1-overlay'));
         this.setupEnable2FAStep2(password);
     }
 
     async setupEnable2FAStep2(password) {
+        // Store password for use in finishEnable2FA
+        this.temp2FAPassword = password;
+        
         try {
             const response = await fetch('/api/2fa/setup', {
                 method: 'POST',
@@ -1990,7 +2057,6 @@ class TimelineApp {
                 
                 // Show step 2 overlay
                 document.getElementById('verify-totp-code').value = '';
-                document.getElementById('enable-2fa-password').value = '';
                 document.getElementById('enable-2fa-step2-error').style.display = 'none';
                 this.showOverlay('enable-2fa-step2-overlay');
             } else {
@@ -2005,10 +2071,14 @@ class TimelineApp {
         e.preventDefault();
         
         const totpCode = document.getElementById('verify-totp-code').value;
-        const password = document.getElementById('enable-2fa-password').value;
         
         if (!this.temp2FASecret) {
             this.showElementError('enable-2fa-step2-error', 'Session expired. Please try again.');
+            return;
+        }
+        
+        if (!this.temp2FAPassword) {
+            this.showElementError('enable-2fa-step2-error', 'Password not found. Please try again.');
             return;
         }
         
@@ -2026,7 +2096,7 @@ class TimelineApp {
                 },
                 body: JSON.stringify({
                     totp_code: totpCode,
-                    password: password
+                    password: this.temp2FAPassword
                 }),
                 credentials: 'include'
             });
@@ -2036,6 +2106,7 @@ class TimelineApp {
             if (data.success) {
                 // Clear temporary data
                 this.temp2FASecret = null;
+                this.temp2FAPassword = null;
                 
                 // Clear QR code
                 const canvas = document.getElementById('twofa-qr-code');
