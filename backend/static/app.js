@@ -1185,24 +1185,29 @@ class TimelineApp {
         const reader = new FileReader();
         reader.onload = (e) => {
             const cropImage = document.getElementById('profile-picture-crop-image');
+            
+            // Destroy previous cropper if exists
+            if (this.cropper) {
+                this.cropper.destroy();
+                this.cropper = null;
+            }
+
             cropImage.src = e.target.result;
             document.getElementById('profile-picture-crop-container').style.display = 'block';
             document.getElementById('set-profile-picture-btn').style.display = 'inline-block';
 
-            // Destroy previous cropper if exists
-            if (this.cropper) {
-                this.cropper.destroy();
-            }
-
-            // Initialize Cropper.js
-            this.cropper = new Cropper(cropImage, {
-                aspectRatio: 1,
-                viewMode: 1,
-                minCropBoxWidth: 100,
-                minCropBoxHeight: 100,
-                autoCropArea: 1,
-                responsive: true,
-            });
+            // Wait for image to load before initializing cropper
+            cropImage.onload = () => {
+                // Initialize Cropper.js after image is loaded
+                this.cropper = new Cropper(cropImage, {
+                    aspectRatio: 1,
+                    viewMode: 1,
+                    minCropBoxWidth: 100,
+                    minCropBoxHeight: 100,
+                    autoCropArea: 1,
+                    responsive: true,
+                });
+            };
         };
         reader.readAsDataURL(file);
     }
@@ -1221,6 +1226,11 @@ class TimelineApp {
                 imageSmoothingEnabled: true,
                 imageSmoothingQuality: 'high'
             });
+
+            if (!canvas) {
+                this.showError('Crop Failed', 'Failed to process the image. Please try again.');
+                return;
+            }
 
             // Convert to PNG data URL
             const dataURL = canvas.toDataURL('image/png');
