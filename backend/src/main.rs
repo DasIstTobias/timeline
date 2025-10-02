@@ -578,12 +578,16 @@ async fn change_password(
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
-    // Get current password hash
-    let current_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+    // Get current password hash and 2FA status
+    let row = sqlx::query("SELECT password_hash, totp_enabled, totp_secret_encrypted FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let current_hash: String = row.get("password_hash");
+    let totp_enabled: bool = row.get("totp_enabled");
+    let totp_secret_encrypted: Option<String> = row.get("totp_secret_encrypted");
     
     // Verify old password
     if !verify_password(&req.old_password, &current_hash).await.unwrap_or(false) {
@@ -597,13 +601,46 @@ async fn change_password(
     let new_hash = hash_password(&req.new_password).await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    // Update password
-    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
-        .bind(&new_hash)
-        .bind(auth_state.user_id)
-        .execute(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // If 2FA is enabled, re-encrypt the TOTP secret with new password
+    let new_totp_secret_encrypted = if totp_enabled && totp_secret_encrypted.is_some() {
+        let old_encrypted = totp_secret_encrypted.unwrap();
+        
+        // Decrypt with old password
+        let totp_secret = crypto::decrypt_totp_secret(&old_encrypted, &req.old_password)
+            .map_err(|e| {
+                log::error!("Failed to decrypt TOTP secret during password change: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        
+        // Re-encrypt with new password
+        let new_encrypted = crypto::encrypt_totp_secret(&totp_secret, &req.new_password, &auth_state.user_id.to_string())
+            .map_err(|e| {
+                log::error!("Failed to re-encrypt TOTP secret during password change: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        
+        Some(new_encrypted)
+    } else {
+        None
+    };
+    
+    // Update password and optionally re-encrypted TOTP secret
+    if let Some(new_encrypted) = new_totp_secret_encrypted {
+        sqlx::query("UPDATE users SET password_hash = $1, totp_secret_encrypted = $2 WHERE id = $3")
+            .bind(&new_hash)
+            .bind(&new_encrypted)
+            .bind(auth_state.user_id)
+            .execute(&state.db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    } else {
+        sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+            .bind(&new_hash)
+            .bind(auth_state.user_id)
+            .execute(&state.db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
     
     Ok(Json(serde_json::json!({"success": true})))
 }
