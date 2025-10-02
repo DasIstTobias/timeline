@@ -55,6 +55,16 @@ struct AppData {
     pending_2fa: Arc<RwLock<HashMap<String, Pending2FAAuth>>>, // temp_session_id -> pending auth
     pending_2fa_secrets: Arc<RwLock<HashMap<Uuid, PendingSecret>>>, // user_id -> pending secret
     twofa_protection: Arc<TwoFABruteForceProtection>,
+    login_rate_limiter: Arc<RwLock<HashMap<String, LoginRateLimit>>>, // IP -> rate limit data
+    require_tls: bool,
+}
+
+// Rate limiting for login attempts
+#[derive(Clone)]
+struct LoginRateLimit {
+    attempts: u32,
+    last_attempt: std::time::SystemTime,
+    locked_until: Option<std::time::SystemTime>,
 }
 
 // Temporary authentication state while waiting for 2FA
@@ -97,12 +107,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::fs::write("admin_credentials.txt", format!("Username: admin\nPassword: {}", admin_password)).await?;
     log::info!("Admin credentials written to admin_credentials.txt");
     
+    // Read configuration from environment
+    let require_tls = std::env::var("REQUIRE_TLS")
+        .unwrap_or_else(|_| "false".to_string())
+        .to_lowercase() == "true";
+    
+    if require_tls {
+        log::info!("TLS enforcement enabled - will require X-Forwarded-Proto: https");
+    } else {
+        log::info!("TLS enforcement disabled - HTTP connections allowed");
+    }
+    
     let app_state = AppState::new(AppData {
         db,
         sessions: Arc::new(RwLock::new(HashMap::new())),
         pending_2fa: Arc::new(RwLock::new(HashMap::new())),
         pending_2fa_secrets: Arc::new(RwLock::new(HashMap::new())),
         twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
+        login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+        require_tls,
     });
     
     // Start background task to cleanup expired sessions
@@ -115,16 +138,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     
-    // Configure CORS - restrict to localhost for development
-    // In production, this should be set to the actual domain
-    let cors = CorsLayer::new()
-        .allow_origin([
-            "http://localhost:8080".parse::<HeaderValue>().unwrap(),
-            "http://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
-        ])
-        .allow_methods([Method::GET, Method::POST])
-        .allow_credentials(true)
-        .allow_headers([header::CONTENT_TYPE, header::COOKIE]);
+    // Configure CORS based on environment variable
+    let cors_domain = std::env::var("CORS_DOMAIN")
+        .unwrap_or_else(|_| "localhost".to_string());
+    
+    let cors = if cors_domain == "localhost" {
+        log::info!("CORS configured for localhost (development mode)");
+        CorsLayer::new()
+            .allow_origin([
+                "http://localhost:8080".parse::<HeaderValue>().unwrap(),
+                "http://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
+                "https://localhost:8080".parse::<HeaderValue>().unwrap(),
+                "https://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
+            ])
+            .allow_methods([Method::GET, Method::POST])
+            .allow_credentials(true)
+            .allow_headers([header::CONTENT_TYPE, header::COOKIE])
+    } else {
+        log::info!("CORS configured for domain: {}", cors_domain);
+        CorsLayer::new()
+            .allow_origin([
+                format!("https://{}", cors_domain).parse::<HeaderValue>().unwrap(),
+                format!("http://{}", cors_domain).parse::<HeaderValue>().unwrap(),
+            ])
+            .allow_methods([Method::GET, Method::POST])
+            .allow_credentials(true)
+            .allow_headers([header::CONTENT_TYPE, header::COOKIE])
+    };
     
     let app = Router::new()
         .route("/", get(serve_index))
@@ -175,7 +215,115 @@ async fn get_user_info(
     })))
 }
 
-async fn serve_index(_headers: HeaderMap, State(_state): State<AppState>) -> Response {
+// Middleware to check TLS requirement
+fn check_tls_requirement(headers: &HeaderMap, require_tls: bool) -> Result<(), StatusCode> {
+    if !require_tls {
+        return Ok(());
+    }
+    
+    // Check X-Forwarded-Proto header set by reverse proxy
+    if let Some(proto) = headers.get("x-forwarded-proto") {
+        if proto.to_str().unwrap_or("") == "https" {
+            return Ok(());
+        }
+    }
+    
+    log::warn!("TLS required but request not over HTTPS");
+    Err(StatusCode::FORBIDDEN)
+}
+
+// Helper function to get client IP address
+fn get_client_ip(headers: &HeaderMap) -> String {
+    // Check X-Forwarded-For header first (set by reverse proxy)
+    if let Some(forwarded) = headers.get("x-forwarded-for") {
+        if let Ok(ip_str) = forwarded.to_str() {
+            // Take first IP in the list
+            if let Some(ip) = ip_str.split(',').next() {
+                return ip.trim().to_string();
+            }
+        }
+    }
+    
+    // Check X-Real-IP header
+    if let Some(real_ip) = headers.get("x-real-ip") {
+        if let Ok(ip_str) = real_ip.to_str() {
+            return ip_str.to_string();
+        }
+    }
+    
+    // Fallback to "unknown"
+    "unknown".to_string()
+}
+
+// Check and update login rate limiting
+async fn check_login_rate_limit(
+    ip: &str,
+    rate_limiter: &Arc<RwLock<HashMap<String, LoginRateLimit>>>,
+) -> Result<(), String> {
+    let now = std::time::SystemTime::now();
+    let mut limiter = rate_limiter.write().await;
+    
+    let rate_limit = limiter.entry(ip.to_string()).or_insert(LoginRateLimit {
+        attempts: 0,
+        last_attempt: now,
+        locked_until: None,
+    });
+    
+    // Check if currently locked
+    if let Some(locked_until) = rate_limit.locked_until {
+        if now < locked_until {
+            let remaining = locked_until.duration_since(now).unwrap_or_default().as_secs();
+            return Err(format!("Too many login attempts. Try again in {} seconds", remaining));
+        } else {
+            // Lock expired, reset
+            rate_limit.attempts = 0;
+            rate_limit.locked_until = None;
+        }
+    }
+    
+    // Check if we should reset the counter (more than 15 minutes since last attempt)
+    if let Ok(duration) = now.duration_since(rate_limit.last_attempt) {
+        if duration.as_secs() > 900 {
+            rate_limit.attempts = 0;
+        }
+    }
+    
+    // Increment attempts
+    rate_limit.attempts += 1;
+    rate_limit.last_attempt = now;
+    
+    // Apply progressive lockout
+    if rate_limit.attempts >= 10 {
+        // 10+ attempts = 1 hour lockout
+        rate_limit.locked_until = Some(now + std::time::Duration::from_secs(3600));
+        return Err("Too many login attempts. Locked for 1 hour".to_string());
+    } else if rate_limit.attempts >= 7 {
+        // 7-9 attempts = 15 minutes lockout
+        rate_limit.locked_until = Some(now + std::time::Duration::from_secs(900));
+        return Err("Too many login attempts. Locked for 15 minutes".to_string());
+    } else if rate_limit.attempts >= 5 {
+        // 5-6 attempts = 5 minutes lockout
+        rate_limit.locked_until = Some(now + std::time::Duration::from_secs(300));
+        return Err("Too many login attempts. Locked for 5 minutes".to_string());
+    }
+    
+    Ok(())
+}
+
+// Reset login rate limit on successful login
+async fn reset_login_rate_limit(
+    ip: &str,
+    rate_limiter: &Arc<RwLock<HashMap<String, LoginRateLimit>>>,
+) {
+    let mut limiter = rate_limiter.write().await;
+    limiter.remove(ip);
+}
+
+async fn serve_index(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    if let Err(status) = check_tls_requirement(&headers, state.require_tls) {
+        return (status, "TLS required").into_response();
+    }
+    
     let html = tokio::fs::read_to_string("static/index.html").await
         .unwrap_or_else(|_| include_str!("../static/index.html").to_string());
     Html(html).into_response()
@@ -198,9 +346,29 @@ struct LoginResponse {
 }
 
 async fn login(
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
+    // Check TLS requirement
+    if let Err(status) = check_tls_requirement(&headers, state.require_tls) {
+        return Err(status);
+    }
+    
+    // Get client IP for rate limiting
+    let client_ip = get_client_ip(&headers);
+    
+    // Check rate limiting
+    if let Err(msg) = check_login_rate_limit(&client_ip, &state.login_rate_limiter).await {
+        return Ok((HeaderMap::new(), Json(LoginResponse {
+            success: false,
+            user_type: None,
+            message: Some(msg),
+            requires_2fa: None,
+            temp_session_id: None,
+        })));
+    }
+    
     // Always perform a dummy hash operation to ensure constant time
     let dummy_hash = "$2b$12$dummy.hash.for.timing.protection.with.enough.length.here.ok";
     let mut password_to_verify = dummy_hash.to_string();
@@ -270,7 +438,10 @@ async fn login(
             // No 2FA required or admin user - create full session
             let session_id = create_session(user_id, &state.sessions).await;
             
-            let mut headers = HeaderMap::new();
+            // Reset rate limit on successful login
+            reset_login_rate_limit(&client_ip, &state.login_rate_limiter).await;
+            
+            let mut response_headers = HeaderMap::new();
             let cookie_value = if req.remember_me.unwrap_or(false) {
                 // Persistent cookie for 24 hours when remember me is checked
                 format!("session_id={}; HttpOnly; Path=/; Max-Age=86400; SameSite=Strict", session_id)
@@ -278,9 +449,9 @@ async fn login(
                 // Session-only cookie when remember me is not checked
                 format!("session_id={}; HttpOnly; Path=/; SameSite=Strict", session_id)
             };
-            headers.insert(header::SET_COOKIE, cookie_value.parse().unwrap());
+            response_headers.insert(header::SET_COOKIE, cookie_value.parse().unwrap());
             
-            return Ok((headers, Json(LoginResponse {
+            return Ok((response_headers, Json(LoginResponse {
                 success: true,
                 user_type: Some(if is_admin { "admin".to_string() } else { "user".to_string() }),
                 message: None,
@@ -891,12 +1062,13 @@ async fn verify_2fa_login(
     State(state): State<AppState>,
     Json(req): Json<Verify2FALoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
+    // Check TLS requirement
+    if let Err(status) = check_tls_requirement(&headers, state.require_tls) {
+        return Err(status);
+    }
+    
     // Get client identifier for brute-force protection (use IP address)
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string();
+    let client_ip = get_client_ip(&headers);
     
     // Validate TOTP code format (6 digits)
     if req.totp_code.len() != 6 || !req.totp_code.chars().all(|c| c.is_ascii_digit()) {
@@ -1008,6 +1180,9 @@ async fn verify_2fa_login(
     // 2FA verification successful - remove pending session and create real session
     state.pending_2fa.write().await.remove(&req.temp_session_id);
     let session_id = create_session(pending.user_id, &state.sessions).await;
+    
+    // Reset login rate limit on successful 2FA verification
+    reset_login_rate_limit(&client_ip, &state.login_rate_limiter).await;
     
     let mut response_headers = HeaderMap::new();
     let cookie_value = if pending.remember_me {
