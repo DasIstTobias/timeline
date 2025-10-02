@@ -76,11 +76,35 @@ struct Pending2FAAuth {
     created_at: std::time::SystemTime,
 }
 
+impl Drop for Pending2FAAuth {
+    fn drop(&mut self) {
+        // Overwrite password with zeros before dropping
+        unsafe {
+            let bytes = self.password.as_bytes_mut();
+            for byte in bytes.iter_mut() {
+                *byte = 0;
+            }
+        }
+    }
+}
+
 // Pending 2FA secret during setup
 #[derive(Clone)]
 struct PendingSecret {
     secret: String,
     created_at: std::time::SystemTime,
+}
+
+impl Drop for PendingSecret {
+    fn drop(&mut self) {
+        // Overwrite secret with zeros before dropping
+        unsafe {
+            let bytes = self.secret.as_bytes_mut();
+            for byte in bytes.iter_mut() {
+                *byte = 0;
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -133,6 +157,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await; // Run every hour
             auth::cleanup_expired_sessions(&sessions_for_cleanup).await;
             log::info!("Cleaned up expired sessions");
+        }
+    });
+    
+    // Start background task to cleanup expired pending 2FA sessions and secrets
+    let pending_2fa_cleanup = app_state.pending_2fa.clone();
+    let pending_secrets_cleanup = app_state.pending_2fa_secrets.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(300)).await; // Run every 5 minutes
+            
+            // Clean up pending 2FA sessions older than 5 minutes
+            let now = std::time::SystemTime::now();
+            let mut pending = pending_2fa_cleanup.write().await;
+            pending.retain(|_, auth| {
+                if let Ok(elapsed) = now.duration_since(auth.created_at) {
+                    elapsed.as_secs() <= 300
+                } else {
+                    false
+                }
+            });
+            drop(pending);
+            
+            // Clean up pending 2FA secrets older than 10 minutes
+            let mut secrets = pending_secrets_cleanup.write().await;
+            secrets.retain(|_, secret| {
+                if let Ok(elapsed) = now.duration_since(secret.created_at) {
+                    elapsed.as_secs() <= 600
+                } else {
+                    false
+                }
+            });
+            
+            log::info!("Cleaned up expired pending 2FA sessions and secrets");
         }
     });
     
@@ -324,7 +381,37 @@ async fn serve_index(headers: HeaderMap, State(state): State<AppState>) -> Respo
     
     let html = tokio::fs::read_to_string("static/index.html").await
         .unwrap_or_else(|_| include_str!("../static/index.html").to_string());
-    Html(html).into_response()
+    
+    // Add security headers
+    let mut response_headers = HeaderMap::new();
+    
+    // Content Security Policy - only allow local resources
+    response_headers.insert(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+            .parse()
+            .unwrap(),
+    );
+    
+    // Additional security headers
+    response_headers.insert(
+        "X-Frame-Options",
+        "DENY".parse().unwrap(),
+    );
+    response_headers.insert(
+        "X-Content-Type-Options",
+        "nosniff".parse().unwrap(),
+    );
+    response_headers.insert(
+        "Referrer-Policy",
+        "no-referrer".parse().unwrap(),
+    );
+    response_headers.insert(
+        "Permissions-Policy",
+        "geolocation=(), microphone=(), camera=()".parse().unwrap(),
+    );
+    
+    (response_headers, Html(html)).into_response()
 }
 
 #[derive(Deserialize)]
