@@ -11,6 +11,7 @@ pub struct User {
 }
 
 #[derive(Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Event {
     pub id: Uuid,
     pub user_id: Uuid,

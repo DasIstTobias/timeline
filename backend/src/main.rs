@@ -71,8 +71,6 @@ struct LoginRateLimit {
 #[derive(Clone)]
 struct Pending2FAAuth {
     user_id: Uuid,
-    username: String,
-    is_admin: bool,
     remember_me: bool,
     password: String, // Store password temporarily to decrypt TOTP secret
     created_at: std::time::SystemTime,
@@ -410,7 +408,7 @@ async fn login(
     let password_valid = verify_password(&req.password, &password_to_verify).await.unwrap_or(false);
     
     if is_valid_user && password_valid {
-        if let Some((user_id, username, is_admin)) = user_data {
+        if let Some((user_id, _username, is_admin)) = user_data {
             // Check if user has 2FA enabled (only for non-admin users)
             if !is_admin && totp_enabled {
                 // Create a temporary pending 2FA session
@@ -418,8 +416,6 @@ async fn login(
                 
                 state.pending_2fa.write().await.insert(temp_session_id.clone(), Pending2FAAuth {
                     user_id,
-                    username: username.clone(),
-                    is_admin,
                     remember_me: req.remember_me.unwrap_or(false),
                     password: req.password.clone(), // Store password temporarily for TOTP decryption
                     created_at: std::time::SystemTime::now(),
@@ -877,6 +873,7 @@ async fn create_event(
 
 #[derive(Deserialize)]
 struct DeleteEventRequest {
+    #[allow(dead_code)]
     confirmation_title: String,
 }
 

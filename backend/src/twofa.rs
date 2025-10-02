@@ -71,6 +71,7 @@ impl TwoFABruteForceProtection {
     }
 
     // Clean up old entries periodically (can be called from a background task)
+    #[allow(dead_code)]
     pub async fn cleanup_old_entries(&self) {
         let mut attempts = self.failed_attempts.write().await;
         let now = SystemTime::now();
