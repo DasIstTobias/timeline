@@ -253,12 +253,36 @@ class TimelineApp {
             console.error('Logout error:', error);
         }
         
+        // Aggressively clear all sensitive data from memory
+        this.clearSensitiveData();
+        location.reload();
+    }
+    
+    // Clear all sensitive data from memory
+    clearSensitiveData() {
+        // Overwrite sensitive strings before nullifying
+        if (this.userPassword) {
+            this.userPassword = '\0'.repeat(this.userPassword.length);
+        }
+        if (this.temp2FASecret) {
+            this.temp2FASecret = '\0'.repeat(this.temp2FASecret.length);
+        }
+        if (this.temp2FAPassword) {
+            this.temp2FAPassword = '\0'.repeat(this.temp2FAPassword.length);
+        }
+        
+        // Null out all sensitive properties
         this.currentUser = null;
         this.userPassword = null;
+        this.temp2FASecret = null;
+        this.temp2FAPassword = null;
+        this.temp2FASessionId = null;
         this.events = [];
         this.tags = [];
+        this.notes = '';
+        
+        // Clear local storage
         localStorage.removeItem('rememberMe');
-        location.reload();
     }
 
     showLoginScreen() {
@@ -2055,6 +2079,10 @@ class TimelineApp {
                     size: 250
                 });
                 
+                // Clear secret from local variable immediately after QR generation
+                const secretCopy = data.secret;
+                data.secret = null;
+                
                 // Show step 2 overlay
                 document.getElementById('verify-totp-code').value = '';
                 document.getElementById('enable-2fa-step2-error').style.display = 'none';
@@ -2104,14 +2132,23 @@ class TimelineApp {
             const data = await response.json();
             
             if (data.success) {
-                // Clear temporary data
-                this.temp2FASecret = null;
-                this.temp2FAPassword = null;
+                // Aggressively clear temporary data
+                if (this.temp2FASecret) {
+                    this.temp2FASecret = '\0'.repeat(this.temp2FASecret.length);
+                    this.temp2FASecret = null;
+                }
+                if (this.temp2FAPassword) {
+                    this.temp2FAPassword = '\0'.repeat(this.temp2FAPassword.length);
+                    this.temp2FAPassword = null;
+                }
                 
                 // Clear QR code
                 const canvas = document.getElementById('twofa-qr-code');
                 const ctx = canvas.getContext('2d');
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // Clear displayed secret
+                document.getElementById('totp-secret-display').textContent = '';
                 
                 // Close overlay
                 this.closeOverlay(document.getElementById('enable-2fa-step2-overlay'));
