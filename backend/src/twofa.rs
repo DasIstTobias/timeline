@@ -71,6 +71,7 @@ impl TwoFABruteForceProtection {
     }
 
     // Clean up old entries periodically (can be called from a background task)
+    #[allow(dead_code)]
     pub async fn cleanup_old_entries(&self) {
         let mut attempts = self.failed_attempts.write().await;
         let now = SystemTime::now();
@@ -117,8 +118,9 @@ pub fn verify_totp_code(secret: &str, code: &str) -> bool {
         .unwrap()
         .as_secs();
 
-    // Check current time and 30 seconds before/after to account for clock skew
-    for offset in [-30i64, 0, 30] {
+    // Check current time and 30 seconds before to account for clock skew
+    // Note: We only check previous and current windows (60s total), not future
+    for offset in [-30i64, 0] {
         let test_timestamp = (timestamp as i64 + offset) as u64;
         let generated_code = totp::<Sha1>(&secret_bytes, test_timestamp);
         

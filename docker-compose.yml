@@ -23,6 +23,14 @@ services:
     environment:
       DATABASE_URL: postgresql://timeline_user:timeline_password@database:5432/timeline
       RUST_LOG: info
+      # CORS Domain Configuration
+      # Set to "localhost" for local development/testing
+      # Set to your production domain (e.g., "timeline.example.com") for production
+      CORS_DOMAIN: localhost
+      # TLS Enforcement (when behind reverse proxy)
+      # Set to "true" to require TLS connections (checks X-Forwarded-Proto header)
+      # Set to "false" to allow HTTP (default for local development)
+      REQUIRE_TLS: "false"
     depends_on:
       - database
     networks:

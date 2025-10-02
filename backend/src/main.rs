@@ -1,6 +1,6 @@
 use axum::{
     extract::{State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode, Method, HeaderValue},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -18,7 +18,7 @@ mod crypto;
 mod models;
 mod twofa;
 
-use auth::{create_session, verify_session};
+use auth::{create_session, verify_session, SessionData};
 use crypto::{generate_random_password, hash_password, verify_password};
 use twofa::TwoFABruteForceProtection;
 
@@ -51,18 +51,35 @@ type AppState = Arc<AppData>;
 #[derive(Clone)]
 struct AppData {
     db: PgPool,
-    sessions: Arc<RwLock<HashMap<String, Uuid>>>, // session_id -> user_id
+    sessions: Arc<RwLock<HashMap<String, SessionData>>>, // session_id -> SessionData
     pending_2fa: Arc<RwLock<HashMap<String, Pending2FAAuth>>>, // temp_session_id -> pending auth
+    pending_2fa_secrets: Arc<RwLock<HashMap<Uuid, PendingSecret>>>, // user_id -> pending secret
     twofa_protection: Arc<TwoFABruteForceProtection>,
+    login_rate_limiter: Arc<RwLock<HashMap<String, LoginRateLimit>>>, // IP -> rate limit data
+    require_tls: bool,
+}
+
+// Rate limiting for login attempts
+#[derive(Clone)]
+struct LoginRateLimit {
+    attempts: u32,
+    last_attempt: std::time::SystemTime,
+    locked_until: Option<std::time::SystemTime>,
 }
 
 // Temporary authentication state while waiting for 2FA
 #[derive(Clone)]
 struct Pending2FAAuth {
     user_id: Uuid,
-    username: String,
-    is_admin: bool,
     remember_me: bool,
+    password: String, // Store password temporarily to decrypt TOTP secret
+    created_at: std::time::SystemTime,
+}
+
+// Pending 2FA secret during setup
+#[derive(Clone)]
+struct PendingSecret {
+    secret: String,
     created_at: std::time::SystemTime,
 }
 
@@ -88,12 +105,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::fs::write("admin_credentials.txt", format!("Username: admin\nPassword: {}", admin_password)).await?;
     log::info!("Admin credentials written to admin_credentials.txt");
     
+    // Read configuration from environment
+    let require_tls = std::env::var("REQUIRE_TLS")
+        .unwrap_or_else(|_| "false".to_string())
+        .to_lowercase() == "true";
+    
+    if require_tls {
+        log::info!("TLS enforcement enabled - will require X-Forwarded-Proto: https");
+    } else {
+        log::info!("TLS enforcement disabled - HTTP connections allowed");
+    }
+    
     let app_state = AppState::new(AppData {
         db,
         sessions: Arc::new(RwLock::new(HashMap::new())),
         pending_2fa: Arc::new(RwLock::new(HashMap::new())),
+        pending_2fa_secrets: Arc::new(RwLock::new(HashMap::new())),
         twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
+        login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+        require_tls,
     });
+    
+    // Start background task to cleanup expired sessions
+    let sessions_for_cleanup = app_state.sessions.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await; // Run every hour
+            auth::cleanup_expired_sessions(&sessions_for_cleanup).await;
+            log::info!("Cleaned up expired sessions");
+        }
+    });
+    
+    // Configure CORS based on environment variable
+    let cors_domain = std::env::var("CORS_DOMAIN")
+        .unwrap_or_else(|_| "localhost".to_string());
+    
+    let cors = if cors_domain == "localhost" {
+        log::info!("CORS configured for localhost (development mode)");
+        CorsLayer::new()
+            .allow_origin([
+                "http://localhost:8080".parse::<HeaderValue>().unwrap(),
+                "http://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
+                "https://localhost:8080".parse::<HeaderValue>().unwrap(),
+                "https://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
+            ])
+            .allow_methods([Method::GET, Method::POST])
+            .allow_credentials(true)
+            .allow_headers([header::CONTENT_TYPE, header::COOKIE])
+    } else {
+        log::info!("CORS configured for domain: {}", cors_domain);
+        CorsLayer::new()
+            .allow_origin([
+                format!("https://{}", cors_domain).parse::<HeaderValue>().unwrap(),
+                format!("http://{}", cors_domain).parse::<HeaderValue>().unwrap(),
+            ])
+            .allow_methods([Method::GET, Method::POST])
+            .allow_credentials(true)
+            .allow_headers([header::CONTENT_TYPE, header::COOKIE])
+    };
     
     let app = Router::new()
         .route("/", get(serve_index))
@@ -121,7 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/2fa/disable", post(disable_2fa))
         .nest_service("/static", ServeDir::new("static"))
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024)) // 2MB limit
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(app_state);
     
     log::info!("Timeline server starting on port 8080");
@@ -144,7 +213,115 @@ async fn get_user_info(
     })))
 }
 
-async fn serve_index(_headers: HeaderMap, State(_state): State<AppState>) -> Response {
+// Middleware to check TLS requirement
+fn check_tls_requirement(headers: &HeaderMap, require_tls: bool) -> Result<(), StatusCode> {
+    if !require_tls {
+        return Ok(());
+    }
+    
+    // Check X-Forwarded-Proto header set by reverse proxy
+    if let Some(proto) = headers.get("x-forwarded-proto") {
+        if proto.to_str().unwrap_or("") == "https" {
+            return Ok(());
+        }
+    }
+    
+    log::warn!("TLS required but request not over HTTPS");
+    Err(StatusCode::FORBIDDEN)
+}
+
+// Helper function to get client IP address
+fn get_client_ip(headers: &HeaderMap) -> String {
+    // Check X-Forwarded-For header first (set by reverse proxy)
+    if let Some(forwarded) = headers.get("x-forwarded-for") {
+        if let Ok(ip_str) = forwarded.to_str() {
+            // Take first IP in the list
+            if let Some(ip) = ip_str.split(',').next() {
+                return ip.trim().to_string();
+            }
+        }
+    }
+    
+    // Check X-Real-IP header
+    if let Some(real_ip) = headers.get("x-real-ip") {
+        if let Ok(ip_str) = real_ip.to_str() {
+            return ip_str.to_string();
+        }
+    }
+    
+    // Fallback to "unknown"
+    "unknown".to_string()
+}
+
+// Check and update login rate limiting
+async fn check_login_rate_limit(
+    ip: &str,
+    rate_limiter: &Arc<RwLock<HashMap<String, LoginRateLimit>>>,
+) -> Result<(), String> {
+    let now = std::time::SystemTime::now();
+    let mut limiter = rate_limiter.write().await;
+    
+    let rate_limit = limiter.entry(ip.to_string()).or_insert(LoginRateLimit {
+        attempts: 0,
+        last_attempt: now,
+        locked_until: None,
+    });
+    
+    // Check if currently locked
+    if let Some(locked_until) = rate_limit.locked_until {
+        if now < locked_until {
+            let remaining = locked_until.duration_since(now).unwrap_or_default().as_secs();
+            return Err(format!("Too many login attempts. Try again in {} seconds", remaining));
+        } else {
+            // Lock expired, reset
+            rate_limit.attempts = 0;
+            rate_limit.locked_until = None;
+        }
+    }
+    
+    // Check if we should reset the counter (more than 15 minutes since last attempt)
+    if let Ok(duration) = now.duration_since(rate_limit.last_attempt) {
+        if duration.as_secs() > 900 {
+            rate_limit.attempts = 0;
+        }
+    }
+    
+    // Increment attempts
+    rate_limit.attempts += 1;
+    rate_limit.last_attempt = now;
+    
+    // Apply progressive lockout
+    if rate_limit.attempts >= 10 {
+        // 10+ attempts = 1 hour lockout
+        rate_limit.locked_until = Some(now + std::time::Duration::from_secs(3600));
+        return Err("Too many login attempts. Locked for 1 hour".to_string());
+    } else if rate_limit.attempts >= 7 {
+        // 7-9 attempts = 15 minutes lockout
+        rate_limit.locked_until = Some(now + std::time::Duration::from_secs(900));
+        return Err("Too many login attempts. Locked for 15 minutes".to_string());
+    } else if rate_limit.attempts >= 5 {
+        // 5-6 attempts = 5 minutes lockout
+        rate_limit.locked_until = Some(now + std::time::Duration::from_secs(300));
+        return Err("Too many login attempts. Locked for 5 minutes".to_string());
+    }
+    
+    Ok(())
+}
+
+// Reset login rate limit on successful login
+async fn reset_login_rate_limit(
+    ip: &str,
+    rate_limiter: &Arc<RwLock<HashMap<String, LoginRateLimit>>>,
+) {
+    let mut limiter = rate_limiter.write().await;
+    limiter.remove(ip);
+}
+
+async fn serve_index(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    if let Err(status) = check_tls_requirement(&headers, state.require_tls) {
+        return (status, "TLS required").into_response();
+    }
+    
     let html = tokio::fs::read_to_string("static/index.html").await
         .unwrap_or_else(|_| include_str!("../static/index.html").to_string());
     Html(html).into_response()
@@ -167,9 +344,29 @@ struct LoginResponse {
 }
 
 async fn login(
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
+    // Check TLS requirement
+    if let Err(status) = check_tls_requirement(&headers, state.require_tls) {
+        return Err(status);
+    }
+    
+    // Get client IP for rate limiting
+    let client_ip = get_client_ip(&headers);
+    
+    // Check rate limiting
+    if let Err(msg) = check_login_rate_limit(&client_ip, &state.login_rate_limiter).await {
+        return Ok((HeaderMap::new(), Json(LoginResponse {
+            success: false,
+            user_type: None,
+            message: Some(msg),
+            requires_2fa: None,
+            temp_session_id: None,
+        })));
+    }
+    
     // Always perform a dummy hash operation to ensure constant time
     let dummy_hash = "$2b$12$dummy.hash.for.timing.protection.with.enough.length.here.ok";
     let mut password_to_verify = dummy_hash.to_string();
@@ -211,7 +408,7 @@ async fn login(
     let password_valid = verify_password(&req.password, &password_to_verify).await.unwrap_or(false);
     
     if is_valid_user && password_valid {
-        if let Some((user_id, username, is_admin)) = user_data {
+        if let Some((user_id, _username, is_admin)) = user_data {
             // Check if user has 2FA enabled (only for non-admin users)
             if !is_admin && totp_enabled {
                 // Create a temporary pending 2FA session
@@ -219,17 +416,16 @@ async fn login(
                 
                 state.pending_2fa.write().await.insert(temp_session_id.clone(), Pending2FAAuth {
                     user_id,
-                    username: username.clone(),
-                    is_admin,
                     remember_me: req.remember_me.unwrap_or(false),
+                    password: req.password.clone(), // Store password temporarily for TOTP decryption
                     created_at: std::time::SystemTime::now(),
                 });
                 
-                // Return success but indicate 2FA is required
+                // Return without revealing success until 2FA is completed
                 return Ok((HeaderMap::new(), Json(LoginResponse {
-                    success: true,
-                    user_type: Some("user".to_string()),
-                    message: None,
+                    success: false,
+                    user_type: None,
+                    message: Some("2FA verification required".to_string()),
                     requires_2fa: Some(true),
                     temp_session_id: Some(temp_session_id),
                 })));
@@ -238,7 +434,10 @@ async fn login(
             // No 2FA required or admin user - create full session
             let session_id = create_session(user_id, &state.sessions).await;
             
-            let mut headers = HeaderMap::new();
+            // Reset rate limit on successful login
+            reset_login_rate_limit(&client_ip, &state.login_rate_limiter).await;
+            
+            let mut response_headers = HeaderMap::new();
             let cookie_value = if req.remember_me.unwrap_or(false) {
                 // Persistent cookie for 24 hours when remember me is checked
                 format!("session_id={}; HttpOnly; Path=/; Max-Age=86400; SameSite=Strict", session_id)
@@ -246,9 +445,9 @@ async fn login(
                 // Session-only cookie when remember me is not checked
                 format!("session_id={}; HttpOnly; Path=/; SameSite=Strict", session_id)
             };
-            headers.insert(header::SET_COOKIE, cookie_value.parse().unwrap());
+            response_headers.insert(header::SET_COOKIE, cookie_value.parse().unwrap());
             
-            return Ok((headers, Json(LoginResponse {
+            return Ok((response_headers, Json(LoginResponse {
                 success: true,
                 user_type: Some(if is_admin { "admin".to_string() } else { "user".to_string() }),
                 message: None,
@@ -375,12 +574,16 @@ async fn change_password(
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
-    // Get current password hash
-    let current_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+    // Get current password hash and 2FA status
+    let row = sqlx::query("SELECT password_hash, totp_enabled, totp_secret_encrypted FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let current_hash: String = row.get("password_hash");
+    let totp_enabled: bool = row.get("totp_enabled");
+    let totp_secret_encrypted: Option<String> = row.get("totp_secret_encrypted");
     
     // Verify old password
     if !verify_password(&req.old_password, &current_hash).await.unwrap_or(false) {
@@ -394,13 +597,46 @@ async fn change_password(
     let new_hash = hash_password(&req.new_password).await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    // Update password
-    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
-        .bind(&new_hash)
-        .bind(auth_state.user_id)
-        .execute(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    // If 2FA is enabled, re-encrypt the TOTP secret with new password
+    let new_totp_secret_encrypted = if totp_enabled && totp_secret_encrypted.is_some() {
+        let old_encrypted = totp_secret_encrypted.unwrap();
+        
+        // Decrypt with old password
+        let totp_secret = crypto::decrypt_totp_secret(&old_encrypted, &req.old_password)
+            .map_err(|e| {
+                log::error!("Failed to decrypt TOTP secret during password change: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        
+        // Re-encrypt with new password
+        let new_encrypted = crypto::encrypt_totp_secret(&totp_secret, &req.new_password, &auth_state.user_id.to_string())
+            .map_err(|e| {
+                log::error!("Failed to re-encrypt TOTP secret during password change: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+        
+        Some(new_encrypted)
+    } else {
+        None
+    };
+    
+    // Update password and optionally re-encrypted TOTP secret
+    if let Some(new_encrypted) = new_totp_secret_encrypted {
+        sqlx::query("UPDATE users SET password_hash = $1, totp_secret_encrypted = $2 WHERE id = $3")
+            .bind(&new_hash)
+            .bind(&new_encrypted)
+            .bind(auth_state.user_id)
+            .execute(&state.db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    } else {
+        sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+            .bind(&new_hash)
+            .bind(auth_state.user_id)
+            .execute(&state.db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
     
     Ok(Json(serde_json::json!({"success": true})))
 }
@@ -637,6 +873,7 @@ async fn create_event(
 
 #[derive(Deserialize)]
 struct DeleteEventRequest {
+    #[allow(dead_code)]
     confirmation_title: String,
 }
 
@@ -859,12 +1096,13 @@ async fn verify_2fa_login(
     State(state): State<AppState>,
     Json(req): Json<Verify2FALoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
+    // Check TLS requirement
+    if let Err(status) = check_tls_requirement(&headers, state.require_tls) {
+        return Err(status);
+    }
+    
     // Get client identifier for brute-force protection (use IP address)
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string();
+    let client_ip = get_client_ip(&headers);
     
     // Validate TOTP code format (6 digits)
     if req.totp_code.len() != 6 || !req.totp_code.chars().all(|c| c.is_ascii_digit()) {
@@ -910,16 +1148,16 @@ async fn verify_2fa_login(
         }
     }
     
-    // Get TOTP secret from database
-    let totp_secret: Option<String> = sqlx::query_scalar(
-        "SELECT totp_secret FROM users WHERE id = $1 AND totp_enabled = true"
+    // Get ENCRYPTED TOTP secret from database
+    let totp_secret_encrypted: Option<String> = sqlx::query_scalar(
+        "SELECT totp_secret_encrypted FROM users WHERE id = $1 AND totp_enabled = true"
     )
         .bind(pending.user_id)
         .fetch_optional(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    let secret = match totp_secret {
+    let encrypted_secret = match totp_secret_encrypted {
         Some(s) => s,
         None => {
             state.pending_2fa.write().await.remove(&req.temp_session_id);
@@ -933,7 +1171,23 @@ async fn verify_2fa_login(
         }
     };
     
-    // Verify TOTP code
+    // Decrypt TOTP secret using user's password
+    let secret = match crypto::decrypt_totp_secret(&encrypted_secret, &pending.password) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to decrypt TOTP secret: {}", e);
+            state.pending_2fa.write().await.remove(&req.temp_session_id);
+            return Ok((HeaderMap::new(), Json(LoginResponse {
+                success: false,
+                user_type: None,
+                message: Some("Failed to verify 2FA".to_string()),
+                requires_2fa: None,
+                temp_session_id: None,
+            })));
+        }
+    };
+    
+    // Verify TOTP code using temporarily decrypted secret
     let code_valid = twofa::verify_totp_code(&secret, &req.totp_code);
     
     // Check brute-force protection
@@ -960,6 +1214,9 @@ async fn verify_2fa_login(
     // 2FA verification successful - remove pending session and create real session
     state.pending_2fa.write().await.remove(&req.temp_session_id);
     let session_id = create_session(pending.user_id, &state.sessions).await;
+    
+    // Reset login rate limit on successful 2FA verification
+    reset_login_rate_limit(&client_ip, &state.login_rate_limiter).await;
     
     let mut response_headers = HeaderMap::new();
     let cookie_value = if pending.remember_me {
@@ -1010,6 +1267,11 @@ async fn get_2fa_status(
     }))
 }
 
+#[derive(Deserialize)]
+struct Setup2FARequest {
+    password: String,
+}
+
 #[derive(Serialize)]
 struct Setup2FAResponse {
     success: bool,
@@ -1021,12 +1283,30 @@ struct Setup2FAResponse {
 async fn setup_2fa(
     headers: HeaderMap,
     State(state): State<AppState>,
+    Json(req): Json<Setup2FARequest>,
 ) -> Result<Json<Setup2FAResponse>, StatusCode> {
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
     if auth_state.is_admin {
         return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Verify password first
+    let password_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+        .bind(auth_state.user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let password_valid = verify_password(&req.password, &password_hash).await.unwrap_or(false);
+    if !password_valid {
+        return Ok(Json(Setup2FAResponse {
+            success: false,
+            secret: None,
+            qr_uri: None,
+            message: Some("Invalid password".to_string()),
+        }));
     }
     
     // Check if 2FA is already enabled
@@ -1047,6 +1327,16 @@ async fn setup_2fa(
     
     // Generate new TOTP secret
     let secret = twofa::generate_totp_secret();
+    
+    // Store secret temporarily (expires in 10 minutes)
+    state.pending_2fa_secrets.write().await.insert(
+        auth_state.user_id,
+        PendingSecret {
+            secret: secret.clone(),
+            created_at: std::time::SystemTime::now(),
+        }
+    );
+    
     let qr_uri = twofa::generate_totp_uri(&secret, &auth_state.username, "Timeline");
     
     Ok(Json(Setup2FAResponse {
@@ -1059,7 +1349,6 @@ async fn setup_2fa(
 
 #[derive(Deserialize)]
 struct Enable2FARequest {
-    secret: String,
     totp_code: String,
     password: String,
 }
@@ -1082,18 +1371,35 @@ async fn enable_2fa(
         return Err(StatusCode::FORBIDDEN);
     }
     
-    // Validate inputs
-    if let Err(msg) = validate_input_string(&req.secret, Some(100)) {
-        return Ok(Json(Enable2FAResponse {
-            success: false,
-            message: Some(format!("Invalid secret: {}", msg)),
-        }));
-    }
-    
     if req.totp_code.len() != 6 || !req.totp_code.chars().all(|c| c.is_ascii_digit()) {
         return Ok(Json(Enable2FAResponse {
             success: false,
             message: Some("Invalid 2FA code format".to_string()),
+        }));
+    }
+    
+    // Get secret from server storage, not from client
+    let pending_secret = {
+        let secrets = state.pending_2fa_secrets.read().await;
+        secrets.get(&auth_state.user_id).cloned()
+    };
+    
+    let pending = match pending_secret {
+        Some(p) => p,
+        None => {
+            return Ok(Json(Enable2FAResponse {
+                success: false,
+                message: Some("No 2FA setup in progress. Please call /api/2fa/setup first.".to_string()),
+            }));
+        }
+    };
+    
+    // Check expiration (10 minutes)
+    if pending.created_at.elapsed().unwrap_or_default() > std::time::Duration::from_secs(600) {
+        state.pending_2fa_secrets.write().await.remove(&auth_state.user_id);
+        return Ok(Json(Enable2FAResponse {
+            success: false,
+            message: Some("Setup expired. Please start again.".to_string()),
         }));
     }
     
@@ -1126,21 +1432,32 @@ async fn enable_2fa(
         }));
     }
     
-    // Verify TOTP code
-    if !twofa::verify_totp_code(&req.secret, &req.totp_code) {
+    // Verify TOTP code against SERVER's secret, not client's
+    if !twofa::verify_totp_code(&pending.secret, &req.totp_code) {
         return Ok(Json(Enable2FAResponse {
             success: false,
             message: Some("Invalid 2FA code".to_string()),
         }));
     }
     
-    // Enable 2FA
-    sqlx::query("UPDATE users SET totp_secret = $1, totp_enabled = true, totp_enabled_at = NOW() WHERE id = $2")
-        .bind(&req.secret)
+    // Encrypt TOTP secret with user's password before storing
+    let user_id_str = auth_state.user_id.to_string();
+    let encrypted_secret = crypto::encrypt_totp_secret(&pending.secret, &req.password, &user_id_str)
+        .map_err(|e| {
+            log::error!("Failed to encrypt TOTP secret: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    // Enable 2FA with ENCRYPTED secret
+    sqlx::query("UPDATE users SET totp_secret_encrypted = $1, totp_enabled = true, totp_enabled_at = NOW() WHERE id = $2")
+        .bind(&encrypted_secret)
         .bind(auth_state.user_id)
         .execute(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Clean up temporary storage
+    state.pending_2fa_secrets.write().await.remove(&auth_state.user_id);
     
     Ok(Json(Enable2FAResponse {
         success: true,
@@ -1180,15 +1497,15 @@ async fn disable_2fa(
         }));
     }
     
-    // Get current 2FA status and secret
-    let row = sqlx::query("SELECT totp_enabled, totp_secret, password_hash FROM users WHERE id = $1")
+    // Get current 2FA status and encrypted secret
+    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted, password_hash FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     let totp_enabled: bool = row.get("totp_enabled");
-    let totp_secret: Option<String> = row.get("totp_secret");
+    let totp_secret_encrypted: Option<String> = row.get("totp_secret_encrypted");
     let password_hash: String = row.get("password_hash");
     
     if !totp_enabled {
@@ -1198,7 +1515,7 @@ async fn disable_2fa(
         }));
     }
     
-    let secret = totp_secret.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let encrypted_secret = totp_secret_encrypted.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     
     // Verify password
     let password_valid = verify_password(&req.password, &password_hash).await.unwrap_or(false);
@@ -1209,6 +1526,18 @@ async fn disable_2fa(
         }));
     }
     
+    // Decrypt TOTP secret to verify code
+    let secret = match crypto::decrypt_totp_secret(&encrypted_secret, &req.password) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("Failed to decrypt TOTP secret: {}", e);
+            return Ok(Json(Disable2FAResponse {
+                success: false,
+                message: Some("Failed to verify 2FA".to_string()),
+            }));
+        }
+    };
+    
     // Verify TOTP code
     if !twofa::verify_totp_code(&secret, &req.totp_code) {
         return Ok(Json(Disable2FAResponse {
@@ -1218,7 +1547,7 @@ async fn disable_2fa(
     }
     
     // Disable 2FA
-    sqlx::query("UPDATE users SET totp_secret = NULL, totp_enabled = false, totp_enabled_at = NULL WHERE id = $1")
+    sqlx::query("UPDATE users SET totp_secret_encrypted = NULL, totp_enabled = false, totp_enabled_at = NULL WHERE id = $1")
         .bind(auth_state.user_id)
         .execute(&state.db)
         .await
