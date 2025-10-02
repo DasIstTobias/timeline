@@ -84,6 +84,7 @@
                 </div>
             </div>
             <div class="top-bar-center">
+                <img id="user-profile-picture" src="" alt="" style="display: none; width: 32px; height: 32px; border-radius: 50%; object-fit: cover; margin-right: 8px; vertical-align: middle;">
                 <span id="user-display-name"></span>
             </div>
             <div class="top-bar-right">
@@ -163,6 +164,18 @@
                     <div class="form-group">
                         <input type="text" id="display-name" placeholder="Enter display name">
                         <button id="save-display-name" class="save-btn">Save</button>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>Profile Picture</h3>
+                    <div class="profile-picture-preview-container">
+                        <img id="profile-picture-preview" src="" alt="Profile picture" style="display: none; width: 150px; height: 150px; border-radius: 50%; object-fit: cover; margin-bottom: 10px;">
+                        <p id="no-profile-picture-text">No profile picture set</p>
+                    </div>
+                    <div class="form-group" style="margin-top: 10px;">
+                        <button id="upload-profile-picture-btn" class="save-btn">Upload New Profile Picture</button>
+                        <button id="remove-profile-picture-btn" class="save-btn" style="display: none; margin-left: 10px;">Remove Profile Picture</button>
                     </div>
                 </div>
                 
@@ -704,6 +717,31 @@
         </div>
     </div>
 
+    <!-- Profile Picture Upload Overlay -->
+    <div id="profile-picture-upload-overlay" class="overlay" style="display: none;">
+        <div class="overlay-content">
+            <div class="overlay-header">
+                <h2>Upload Profile Picture</h2>
+                <button class="close-overlay" id="close-profile-picture-upload">&times;</button>
+            </div>
+            <div class="profile-picture-upload-content">
+                <div class="form-group">
+                    <p>Select an image file (PNG, JPG, JPEG, or WEBP, max 1MB)</p>
+                    <input type="file" id="profile-picture-file-input" accept=".png,.jpg,.jpeg,.webp" style="margin: 10px 0;">
+                </div>
+                <div id="profile-picture-crop-container" style="display: none; max-width: 100%; margin: 20px 0;">
+                    <img id="profile-picture-crop-image" style="max-width: 100%; display: block;">
+                </div>
+                <div class="form-actions" style="margin-top: 20px;">
+                    <button id="cancel-profile-picture-upload" class="secondary-btn">Cancel</button>
+                    <button id="set-profile-picture-btn" class="primary-btn" style="display: none;">Set New Profile Picture</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <link rel="stylesheet" href="/static/cropper.min.css">
+    <script src="/static/cropper.min.js"></script>
     <script src="/static/qrious.min.js" integrity="sha384-Dr98ddmUw2QkdCarNQ+OL7xLty7cSxgR0T7v1tq4UErS/qLV0132sBYTolRAFuOV" crossorigin="anonymous"></script>
     <script src="/static/crypto.js"></script>
     <script src="/static/app.js"></script>

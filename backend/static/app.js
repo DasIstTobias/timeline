@@ -7,6 +7,7 @@ class TimelineApp {
         this.tags = [];
         this.filteredEvents = [];
         this.notes = '';
+        this.profilePicture = null; // Decrypted profile picture data URL
         this.settings = {
             theme: 'device',
             timeFormat: '24h',
@@ -65,6 +66,8 @@ class TimelineApp {
         
         // Settings
         document.getElementById('save-display-name').addEventListener('click', () => this.saveDisplayName());
+        document.getElementById('upload-profile-picture-btn').addEventListener('click', () => this.showProfilePictureUploadOverlay());
+        document.getElementById('remove-profile-picture-btn').addEventListener('click', () => this.removeProfilePicture());
         document.getElementById('change-password').addEventListener('click', () => this.changePassword());
         document.getElementById('save-theme').addEventListener('click', () => this.saveTheme());
         document.getElementById('save-time-format').addEventListener('click', () => this.saveTimeFormat());
@@ -97,6 +100,11 @@ class TimelineApp {
         
         // Admin password change
         document.getElementById('admin-password-form').addEventListener('submit', (e) => this.handleAdminPasswordChange(e));
+        
+        // Profile picture upload
+        document.getElementById('profile-picture-file-input').addEventListener('change', (e) => this.handleProfilePictureFileSelect(e));
+        document.getElementById('cancel-profile-picture-upload').addEventListener('click', () => this.closeProfilePictureUpload());
+        document.getElementById('set-profile-picture-btn').addEventListener('click', () => this.setNewProfilePicture());
         
         // 2FA functionality
         document.getElementById('twofa-login-form').addEventListener('submit', (e) => this.handle2FALogin(e));
@@ -478,7 +486,21 @@ class TimelineApp {
                     }
                 }
                 
+                // Load profile picture
+                if (data.profile_picture_encrypted) {
+                    try {
+                        const decryptedPicture = await cryptoUtils.decrypt(data.profile_picture_encrypted, this.userPassword);
+                        this.profilePicture = decryptedPicture;
+                    } catch (error) {
+                        console.error('Failed to decrypt profile picture:', error);
+                        this.profilePicture = null;
+                    }
+                } else {
+                    this.profilePicture = null;
+                }
+                
                 this.applySettings();
+                this.updateProfilePictureDisplay();
             }
         } catch (error) {
             console.error('Failed to load settings:', error);
@@ -1099,6 +1121,162 @@ class TimelineApp {
         this.updateUserDisplayName();
     }
 
+    updateProfilePictureDisplay() {
+        const previewImg = document.getElementById('profile-picture-preview');
+        const noProfileText = document.getElementById('no-profile-picture-text');
+        const removeBtn = document.getElementById('remove-profile-picture-btn');
+        const topBarImg = document.getElementById('user-profile-picture');
+        
+        if (this.profilePicture) {
+            previewImg.src = this.profilePicture;
+            previewImg.style.display = 'block';
+            noProfileText.style.display = 'none';
+            removeBtn.style.display = 'inline-block';
+            topBarImg.src = this.profilePicture;
+            topBarImg.style.display = 'inline';
+        } else {
+            previewImg.style.display = 'none';
+            noProfileText.style.display = 'block';
+            removeBtn.style.display = 'none';
+            topBarImg.style.display = 'none';
+        }
+    }
+
+    showProfilePictureUploadOverlay() {
+        this.showOverlay('profile-picture-upload-overlay');
+        // Reset file input
+        document.getElementById('profile-picture-file-input').value = '';
+        document.getElementById('profile-picture-crop-container').style.display = 'none';
+        document.getElementById('set-profile-picture-btn').style.display = 'none';
+        if (this.cropper) {
+            this.cropper.destroy();
+            this.cropper = null;
+        }
+    }
+
+    closeProfilePictureUpload() {
+        if (this.cropper) {
+            this.cropper.destroy();
+            this.cropper = null;
+        }
+        this.closeOverlay(document.getElementById('profile-picture-upload-overlay'));
+    }
+
+    async handleProfilePictureFileSelect(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        // Validate file type
+        const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+        if (!validTypes.includes(file.type)) {
+            this.showError('Invalid File Type', 'Please select a PNG, JPG, JPEG, or WEBP image.');
+            event.target.value = '';
+            return;
+        }
+
+        // Validate file size (max 1MB)
+        if (file.size > 1024 * 1024) {
+            this.showError('File Too Large', 'Please select an image smaller than 1MB.');
+            event.target.value = '';
+            return;
+        }
+
+        // Load image for cropping
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const cropImage = document.getElementById('profile-picture-crop-image');
+            cropImage.src = e.target.result;
+            document.getElementById('profile-picture-crop-container').style.display = 'block';
+            document.getElementById('set-profile-picture-btn').style.display = 'inline-block';
+
+            // Destroy previous cropper if exists
+            if (this.cropper) {
+                this.cropper.destroy();
+            }
+
+            // Initialize Cropper.js
+            this.cropper = new Cropper(cropImage, {
+                aspectRatio: 1,
+                viewMode: 1,
+                minCropBoxWidth: 100,
+                minCropBoxHeight: 100,
+                autoCropArea: 1,
+                responsive: true,
+            });
+        };
+        reader.readAsDataURL(file);
+    }
+
+    async setNewProfilePicture() {
+        if (!this.cropper) {
+            this.showError('No Image Selected', 'Please select an image first.');
+            return;
+        }
+
+        try {
+            // Get cropped canvas at 300x300
+            const canvas = this.cropper.getCroppedCanvas({
+                width: 300,
+                height: 300,
+                imageSmoothingEnabled: true,
+                imageSmoothingQuality: 'high'
+            });
+
+            // Convert to PNG data URL
+            const dataURL = canvas.toDataURL('image/png');
+
+            // Encrypt and save
+            const encrypted = await cryptoUtils.encrypt(dataURL, this.userPassword);
+            
+            const response = await fetch('/api/profile-picture', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    profile_picture_encrypted: encrypted
+                }),
+                credentials: 'include'
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                this.profilePicture = dataURL;
+                this.updateProfilePictureDisplay();
+                this.closeProfilePictureUpload();
+                this.showSuccess('Profile Picture Updated', 'Your profile picture has been updated successfully.');
+            } else {
+                this.showError('Upload Failed', data.message || 'Failed to upload profile picture.');
+            }
+        } catch (error) {
+            console.error('Failed to set profile picture:', error);
+            this.showError('Upload Failed', 'Failed to upload profile picture. Please try again.');
+        }
+    }
+
+    async removeProfilePicture() {
+        try {
+            const response = await fetch('/api/profile-picture', {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                this.profilePicture = null;
+                this.updateProfilePictureDisplay();
+                this.showSuccess('Profile Picture Removed', 'Your profile picture has been removed.');
+            } else {
+                this.showError('Remove Failed', data.message || 'Failed to remove profile picture.');
+            }
+        } catch (error) {
+            console.error('Failed to remove profile picture:', error);
+            this.showError('Remove Failed', 'Failed to remove profile picture. Please try again.');
+        }
+    }
+
     async changePassword() {
         const oldPassword = document.getElementById('old-password').value;
         const newPassword = document.getElementById('new-password').value;
@@ -1136,6 +1314,7 @@ class TimelineApp {
                 })),
                 settings: this.settings,
                 notes: this.notes,
+                profilePicture: this.profilePicture,
                 exported_at: new Date().toISOString()
             };
             
@@ -1212,7 +1391,23 @@ class TimelineApp {
                 await this.saveNotes();
             }
             
-            // Step 8: Clear the temporary backup data from memory
+            // Step 8: Re-save profile picture with new encryption
+            if (backupData.profilePicture) {
+                this.profilePicture = backupData.profilePicture;
+                const encrypted = await cryptoUtils.encrypt(this.profilePicture, this.userPassword);
+                await fetch('/api/profile-picture', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        profile_picture_encrypted: encrypted
+                    }),
+                    credentials: 'include'
+                });
+            }
+            
+            // Step 9: Clear the temporary backup data from memory
             // (JavaScript garbage collector will handle this)
             
             // Reload data to reflect changes
@@ -1808,6 +2003,8 @@ class TimelineApp {
         if (this.currentUser && !this.currentUser.is_admin) {
             this.load2FAStatus();
         }
+        // Update profile picture display
+        this.updateProfilePictureDisplay();
     }
 
     showBackupOverlay() {
