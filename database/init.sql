@@ -8,6 +8,7 @@ CREATE TABLE users (
     password_hash VARCHAR(255) NOT NULL,
     display_name_encrypted TEXT,
     settings_encrypted TEXT,
+    profile_picture_encrypted TEXT,
     is_admin BOOLEAN DEFAULT FALSE,
     totp_secret_encrypted TEXT,
     totp_enabled BOOLEAN DEFAULT FALSE,

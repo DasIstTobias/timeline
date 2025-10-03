@@ -239,6 +239,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/tags", get(get_tags))
         .route("/api/settings", get(get_settings))
         .route("/api/settings", post(save_settings))
+        .route("/api/profile-picture", post(save_profile_picture).delete(delete_profile_picture))
         .route("/api/notes", get(get_notes))
         .route("/api/notes", post(save_notes))
         .route("/api/2fa/status", get(get_2fa_status))
@@ -828,8 +829,8 @@ async fn clear_user_data(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    // Clear user's settings and display name
-    sqlx::query("UPDATE users SET settings_encrypted = NULL, display_name_encrypted = NULL WHERE id = $1")
+    // Clear user's settings, display name, and profile picture
+    sqlx::query("UPDATE users SET settings_encrypted = NULL, display_name_encrypted = NULL, profile_picture_encrypted = NULL WHERE id = $1")
         .bind(auth_state.user_id)
         .execute(&state.db)
         .await
@@ -1040,14 +1041,18 @@ async fn get_settings(
         return Err(StatusCode::FORBIDDEN);
     }
     
-    let settings: Option<String> = sqlx::query_scalar("SELECT settings_encrypted FROM users WHERE id = $1")
+    let row = sqlx::query("SELECT settings_encrypted, profile_picture_encrypted FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
+    let settings: Option<String> = row.get("settings_encrypted");
+    let profile_picture: Option<String> = row.get("profile_picture_encrypted");
+    
     Ok(Json(serde_json::json!({
-        "settings_encrypted": settings
+        "settings_encrypted": settings,
+        "profile_picture_encrypted": profile_picture
     })))
 }
 
@@ -1090,6 +1095,61 @@ async fn save_settings(
     sqlx::query("UPDATE users SET settings_encrypted = $1, display_name_encrypted = $2 WHERE id = $3")
         .bind(&req.settings_encrypted)
         .bind(&req.display_name_encrypted)
+        .bind(auth_state.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+#[derive(Deserialize)]
+struct SaveProfilePictureRequest {
+    profile_picture_encrypted: String,
+}
+
+async fn save_profile_picture(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<SaveProfilePictureRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Validate profile picture input (base64 encoded image data can be large)
+    if let Err(msg) = validate_input_string(&req.profile_picture_encrypted, Some(500000)) {
+        return Ok(Json(serde_json::json!({
+            "success": false,
+            "message": format!("Invalid profile picture: {}", msg)
+        })));
+    }
+    
+    sqlx::query("UPDATE users SET profile_picture_encrypted = $1 WHERE id = $2")
+        .bind(&req.profile_picture_encrypted)
+        .bind(auth_state.user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(Json(serde_json::json!({"success": true})))
+}
+
+async fn delete_profile_picture(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    sqlx::query("UPDATE users SET profile_picture_encrypted = NULL WHERE id = $1")
         .bind(auth_state.user_id)
         .execute(&state.db)
         .await

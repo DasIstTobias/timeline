@@ -8,6 +8,7 @@ pub struct User {
     pub is_admin: bool,
     pub display_name_encrypted: Option<String>,
     pub settings_encrypted: Option<String>,
+    pub profile_picture_encrypted: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
