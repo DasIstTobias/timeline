@@ -158,105 +158,120 @@
                 <button class="close-overlay" id="close-settings">&times;</button>
             </div>
             
+            <div class="settings-tabs">
+                <button class="settings-tab active" data-tab="profile">Profile</button>
+                <button class="settings-tab" data-tab="security">Security</button>
+                <button class="settings-tab" data-tab="appearance">Appearance</button>
+            </div>
+            
             <div class="settings-sections">
-                <div class="settings-section">
-                    <h3>Display Name</h3>
-                    <div class="form-group">
-                        <input type="text" id="display-name" placeholder="Enter display name">
-                        <button id="save-display-name" class="save-btn">Save</button>
+                <!-- Profile Tab -->
+                <div class="settings-tab-content" id="settings-profile" style="display: block;">
+                    <div class="settings-section">
+                        <h3>Display Name</h3>
+                        <div class="form-group">
+                            <input type="text" id="display-name" placeholder="Enter display name">
+                            <button id="save-display-name" class="save-btn">Save</button>
+                        </div>
+                    </div>
+                    
+                    <div class="settings-section">
+                        <h3>Profile Picture</h3>
+                        <div class="profile-picture-preview-container">
+                            <img id="profile-picture-preview" src="" alt="Profile picture" style="display: none; width: 150px; height: 150px; border-radius: 50%; object-fit: cover; margin-bottom: 10px;">
+                            <p id="no-profile-picture-text">No profile picture set</p>
+                        </div>
+                        <div class="form-group" style="margin-top: 10px;">
+                            <button id="upload-profile-picture-btn" class="save-btn">Upload New Profile Picture</button>
+                            <button id="remove-profile-picture-btn" class="save-btn" style="display: none; margin-left: 10px;">Remove Profile Picture</button>
+                        </div>
                     </div>
                 </div>
                 
-                <div class="settings-section">
-                    <h3>Profile Picture</h3>
-                    <div class="profile-picture-preview-container">
-                        <img id="profile-picture-preview" src="" alt="Profile picture" style="display: none; width: 150px; height: 150px; border-radius: 50%; object-fit: cover; margin-bottom: 10px;">
-                        <p id="no-profile-picture-text">No profile picture set</p>
+                <!-- Security Tab -->
+                <div class="settings-tab-content" id="settings-security" style="display: none;">
+                    <div class="settings-section">
+                        <h3>Change Password</h3>
+                        <div class="form-group">
+                            <input type="password" id="old-password" placeholder="Old password">
+                        </div>
+                        <div class="form-group">
+                            <input type="password" id="new-password" placeholder="New password">
+                        </div>
+                        <div class="form-group">
+                            <input type="password" id="confirm-password" placeholder="Confirm new password">
+                        </div>
+                        <button id="change-password" class="save-btn">Change Password</button>
                     </div>
-                    <div class="form-group" style="margin-top: 10px;">
-                        <button id="upload-profile-picture-btn" class="save-btn">Upload New Profile Picture</button>
-                        <button id="remove-profile-picture-btn" class="save-btn" style="display: none; margin-left: 10px;">Remove Profile Picture</button>
-                    </div>
-                </div>
-                
-                <div class="settings-section">
-                    <h3>Change Password</h3>
-                    <div class="form-group">
-                        <input type="password" id="old-password" placeholder="Old password">
-                    </div>
-                    <div class="form-group">
-                        <input type="password" id="new-password" placeholder="New password">
-                    </div>
-                    <div class="form-group">
-                        <input type="password" id="confirm-password" placeholder="Confirm new password">
-                    </div>
-                    <button id="change-password" class="save-btn">Change Password</button>
-                </div>
-                
-                <div class="settings-section">
-                    <h3>Two-Factor Authentication</h3>
-                    <div id="twofa-status-container">
-                        <p id="twofa-status-text">Loading...</p>
-                        <button id="enable-2fa-btn" class="save-btn" style="display: none;">Enable 2FA</button>
-                        <button id="disable-2fa-btn" class="save-btn" style="display: none;">Disable 2FA</button>
+                    
+                    <div class="settings-section">
+                        <h3>Two-Factor Authentication</h3>
+                        <div id="twofa-status-container">
+                            <p id="twofa-status-text">Loading...</p>
+                            <button id="enable-2fa-btn" class="save-btn" style="display: none;">Enable 2FA</button>
+                            <button id="disable-2fa-btn" class="save-btn" style="display: none;">Disable 2FA</button>
+                        </div>
                     </div>
                 </div>
                 
-                <div class="settings-section">
-                    <h3>Theme</h3>
-                    <div class="form-group">
-                        <select id="theme-select">
-                            <option value="device">Device</option>
-                            <option value="light">Light</option>
-                            <option value="dark">Dark</option>
-                        </select>
-                        <button id="save-theme" class="save-btn">Save</button>
+                <!-- Appearance Tab -->
+                <div class="settings-tab-content" id="settings-appearance" style="display: none;">
+                    <div class="settings-section">
+                        <h3>Theme</h3>
+                        <div class="form-group">
+                            <select id="theme-select">
+                                <option value="device">Device</option>
+                                <option value="light">Light</option>
+                                <option value="dark">Dark</option>
+                            </select>
+                            <button id="save-theme" class="save-btn">Save</button>
+                        </div>
                     </div>
-                </div>
-                
-                <div class="settings-section">
-                    <h3>Time Format</h3>
-                    <div class="form-group">
-                        <select id="time-format-select">
-                            <option value="24h">24H</option>
-                            <option value="12h">AM/PM</option>
-                        </select>
-                        <button id="save-time-format" class="save-btn">Save</button>
+                    
+                    <div class="settings-section">
+                        <h3>Time Format</h3>
+                        <div class="form-group">
+                            <select id="time-format-select">
+                                <option value="24h">24H</option>
+                                <option value="12h">AM/PM</option>
+                            </select>
+                            <button id="save-time-format" class="save-btn">Save</button>
+                        </div>
                     </div>
-                </div>
-                
-                <div class="settings-section">
-                    <h3>Date Format</h3>
-                    <div class="form-group">
-                        <select id="date-format-select">
-                            <option value="dd/mm/yyyy">DD/MM/YYYY</option>
-                            <option value="mm/dd/yyyy">MM/DD/YYYY</option>
-                            <option value="yyyy-mm-dd">YYYY-MM-DD</option>
-                            <option value="dd mmm yyyy">1 January 2000</option>
-                        </select>
-                        <button id="save-date-format" class="save-btn">Save</button>
+                    
+                    <div class="settings-section">
+                        <h3>Date Format</h3>
+                        <div class="form-group">
+                            <select id="date-format-select">
+                                <option value="dd/mm/yyyy">DD/MM/YYYY</option>
+                                <option value="mm/dd/yyyy">MM/DD/YYYY</option>
+                                <option value="yyyy-mm-dd">YYYY-MM-DD</option>
+                                <option value="dd mmm yyyy">1 January 2000</option>
+                            </select>
+                            <button id="save-date-format" class="save-btn">Save</button>
+                        </div>
                     </div>
-                </div>
-                
-                <div class="settings-section">
-                    <h3>Time Separators</h3>
-                    <div class="form-group">
-                        <select id="time-separator-select">
-                            <option value="disabled">Disabled</option>
-                            <option value="daily">Daily</option>
-                            <option value="weekly">Weekly</option>
-                            <option value="monthly">Monthly</option>
-                            <option value="yearly">Yearly</option>
-                        </select>
-                        <button id="save-time-separator" class="save-btn">Save</button>
+                    
+                    <div class="settings-section">
+                        <h3>Time Separators</h3>
+                        <div class="form-group">
+                            <select id="time-separator-select">
+                                <option value="disabled">Disabled</option>
+                                <option value="daily">Daily</option>
+                                <option value="weekly">Weekly</option>
+                                <option value="monthly">Monthly</option>
+                                <option value="yearly">Yearly</option>
+                            </select>
+                            <button id="save-time-separator" class="save-btn">Save</button>
+                        </div>
                     </div>
-                </div>
-                
-                <div class="settings-section">
-                    <h3>Accent Colour</h3>
-                    <div class="form-group">
-                        <input type="text" id="accent-color" placeholder="#710193" pattern="^#[0-9A-Fa-f]{6}$">
-                        <button id="save-accent-color" class="save-btn">Save</button>
+                    
+                    <div class="settings-section">
+                        <h3>Accent Colour</h3>
+                        <div class="form-group">
+                            <input type="text" id="accent-color" placeholder="#710193" pattern="^#[0-9A-Fa-f]{6}$">
+                            <button id="save-accent-color" class="save-btn">Save</button>
+                        </div>
                     </div>
                 </div>
             </div>

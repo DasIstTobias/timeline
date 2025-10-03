@@ -64,6 +64,11 @@ class TimelineApp {
             btn.addEventListener('click', (e) => this.closeOverlay(e.target.closest('.overlay')));
         });
         
+        // Settings tabs
+        document.querySelectorAll('.settings-tab').forEach(tab => {
+            tab.addEventListener('click', (e) => this.switchSettingsTab(e.target.dataset.tab));
+        });
+        
         // Settings
         document.getElementById('save-display-name').addEventListener('click', () => this.saveDisplayName());
         document.getElementById('upload-profile-picture-btn').addEventListener('click', () => this.showProfilePictureUploadOverlay());
@@ -2015,6 +2020,32 @@ class TimelineApp {
         }
         // Update profile picture display
         this.updateProfilePictureDisplay();
+        // Show profile tab by default
+        this.switchSettingsTab('profile');
+    }
+
+    switchSettingsTab(tabName) {
+        // Hide all tab contents
+        document.querySelectorAll('.settings-tab-content').forEach(content => {
+            content.style.display = 'none';
+        });
+        
+        // Remove active class from all tabs
+        document.querySelectorAll('.settings-tab').forEach(tab => {
+            tab.classList.remove('active');
+        });
+        
+        // Show selected tab content
+        const selectedContent = document.getElementById(`settings-${tabName}`);
+        if (selectedContent) {
+            selectedContent.style.display = 'block';
+        }
+        
+        // Add active class to selected tab
+        const selectedTab = document.querySelector(`.settings-tab[data-tab="${tabName}"]`);
+        if (selectedTab) {
+            selectedTab.classList.add('active');
+        }
     }
 
     showBackupOverlay() {
