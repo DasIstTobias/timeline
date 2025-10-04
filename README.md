@@ -137,13 +137,82 @@ The application will be available at `http://localhost:8080`
 ## Configuration
 
 ### Environment Variables
-- `DATABASE_URL`: PostgreSQL connection string
-- `RUST_LOG`: Logging level configuration
+
+#### Database Configuration
+- `DATABASE_URL`: PostgreSQL connection string (default: `postgresql://timeline_user:timeline_password@database:5432/timeline`)
+
+#### Logging
+- `RUST_LOG`: Logging level configuration (default: `info`)
+  - Options: `error`, `warn`, `info`, `debug`, `trace`
+
+#### Network Configuration
+- `DOMAIN`: Comma-separated list of allowed domains (default: `localhost`)
+  - Domains should be specified without ports
+  - Each domain is accessible via both HTTP (8080) and HTTPS (8443)
+  - Examples:
+    - `localhost` - Local development
+    - `192.168.1.10,example.com` - Multiple domains
+    - `10.2.0.5` - Internal network access
+
+#### TLS Configuration
+- `REQUIRE_TLS`: Require TLS for all connections (default: `false`)
+  - `true`: Requires TLS encryption (either via reverse proxy or direct)
+  - `false`: Allows both HTTP and HTTPS connections
+  - Checks X-Forwarded-Proto header for reverse proxy setups
+  - Validates direct TLS connections on port 8443
+
+- `USE_SELF_SIGNED_SSL`: Enable self-signed certificate generation (default: `false`)
+  - `true`: Application generates and uses self-signed TLS certificates on port 8443
+  - `false`: Port 8443 is not opened (expects reverse proxy for HTTPS)
+  - Certificates regenerated on each startup
+  - ⚠️ Browsers will show certificate warnings with self-signed certificates
+
+#### Configuration Scenarios
+
+| REQUIRE_TLS | USE_SELF_SIGNED_SSL | Behaviour | Use Case |
+|------------|---------------------|-----------|----------|
+| `false` | `false` | HTTP and HTTPS (via proxy) both allowed | Development, or production with optional HTTPS reverse proxy |
+| `false` | `true` | HTTP (8080) and self-signed HTTPS (8443) available | Testing HTTPS locally without reverse proxy |
+| `true` | `false` | TLS required via reverse proxy, HTTP rejected | Production with reverse proxy (recommended) |
+| `true` | `true` | Auto-redirect HTTP to HTTPS with self-signed cert | Testing HTTPS redirect behaviour |
 
 ### Container Configuration
 - Database: PostgreSQL 17 with persistent volume storage
 - Backend: Rust application with automated dependency management
 - Network: Isolated Docker network for service communication
+- Ports:
+  - `8080`: HTTP (always available, may redirect based on configuration)
+  - `8443`: HTTPS (only when `USE_SELF_SIGNED_SSL=true`)
+
+### Production Deployment with Reverse Proxy
+
+For production deployments, it is recommended to use a reverse proxy (nginx, Caddy, Traefik) with valid TLS certificates:
+
+#### docker-compose.yml Configuration
+```yaml
+environment:
+  DOMAIN: example.com
+  REQUIRE_TLS: "true"
+  USE_SELF_SIGNED_SSL: "false"
+```
+
+#### Example nginx Configuration
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name example.com;
+    
+    ssl_certificate /path/to/cert.pem;
+    ssl_certificate_key /path/to/key.pem;
+    
+    location / {
+        proxy_pass http://localhost:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
 
 ## Development
 
