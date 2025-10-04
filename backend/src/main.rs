@@ -206,17 +206,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "https://localhost:8080".parse::<HeaderValue>().unwrap(),
                 "https://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
             ])
-            .allow_methods([Method::GET, Method::POST])
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
             .allow_credentials(true)
             .allow_headers([header::CONTENT_TYPE, header::COOKIE])
     } else {
-        log::info!("CORS configured for domain: {}", cors_domain);
+        // Parse CORS_DOMAIN as comma-separated list
+        let mut origins = Vec::new();
+        for entry in cors_domain.split(',') {
+            let entry = entry.trim();
+            if entry.starts_with("http://") || entry.starts_with("https://") {
+                // Full URL provided, use as-is
+                origins.push(entry.to_string());
+            } else {
+                // Bare host[:port] provided, create both http and https versions
+                origins.push(format!("http://{}", entry));
+                origins.push(format!("https://{}", entry));
+            }
+        }
+        
+        log::info!("CORS configured for origins: {:?}", origins);
+        
+        let parsed_origins: Vec<HeaderValue> = origins
+            .iter()
+            .filter_map(|o| o.parse::<HeaderValue>().ok())
+            .collect();
+        
         CorsLayer::new()
-            .allow_origin([
-                format!("https://{}", cors_domain).parse::<HeaderValue>().unwrap(),
-                format!("http://{}", cors_domain).parse::<HeaderValue>().unwrap(),
-            ])
-            .allow_methods([Method::GET, Method::POST])
+            .allow_origin(parsed_origins)
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
             .allow_credentials(true)
             .allow_headers([header::CONTENT_TYPE, header::COOKIE])
     };

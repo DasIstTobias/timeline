@@ -139,6 +139,61 @@ The application will be available at `http://localhost:8080`
 ### Environment Variables
 - `DATABASE_URL`: PostgreSQL connection string
 - `RUST_LOG`: Logging level configuration
+- `CORS_DOMAIN`: Comma-separated list of allowed origins (see CORS Configuration below)
+- `REQUIRE_TLS`: Set to `true` to enforce HTTPS (checks X-Forwarded-Proto header)
+
+### CORS Configuration
+
+The `CORS_DOMAIN` environment variable controls which origins can access the API. It accepts:
+- `localhost` (default): Allows http://localhost:8080, http://127.0.0.1:8080, and their HTTPS variants
+- A single domain/IP with optional port: `example.com` or `192.168.1.100:8080`
+- Multiple comma-separated entries: `example.com,192.168.1.100:8080`
+- Full URLs: `https://example.com,http://192.168.1.100:8080`
+
+When a bare host[:port] is provided (without scheme), both HTTP and HTTPS variants are allowed.
+
+Examples:
+```bash
+# Allow localhost only (default)
+CORS_DOMAIN=localhost
+
+# Allow a specific domain
+CORS_DOMAIN=timeline.example.com
+
+# Allow local network access
+CORS_DOMAIN=192.168.178.172:8080
+
+# Allow multiple origins
+CORS_DOMAIN=timeline.example.com,192.168.1.100:8080
+
+# Mix of full URLs and bare hosts
+CORS_DOMAIN=https://timeline.example.com,192.168.1.100:8080
+```
+
+### Secure Context Requirement (HTTPS)
+
+**Important**: The Web Crypto API (used for client-side encryption) is only available in secure contexts:
+- HTTPS connections
+- `localhost` / `127.0.0.1` (even over HTTP)
+
+When accessing the app over HTTP from a non-localhost IP address (e.g., `http://192.168.x.x:8080`), the browser will not provide the Web Crypto API, and encryption/decryption will fail. A warning banner will appear at the top of the page.
+
+**Solutions:**
+1. **For production**: Use HTTPS with a reverse proxy (nginx, Caddy, etc.) and set `REQUIRE_TLS=true`
+2. **For local testing**: Access via `http://localhost:8080` or `http://127.0.0.1:8080`
+3. **For LAN access**: Set up a reverse proxy with SSL/TLS termination
+
+When using a reverse proxy with HTTPS, ensure it sets the `X-Forwarded-Proto: https` header, and configure:
+```bash
+REQUIRE_TLS=true
+CORS_DOMAIN=your-domain.com
+```
+
+For local HTTP testing without encryption (not recommended):
+```bash
+REQUIRE_TLS=false
+CORS_DOMAIN=192.168.x.x:8080
+```
 
 ### Container Configuration
 - Database: PostgreSQL 17 with persistent volume storage

@@ -298,6 +298,17 @@ class TimelineApp {
         localStorage.removeItem('rememberMe');
     }
 
+    // API fetch helper with centralized 401 handling
+    async apiFetch(url, options = {}) {
+        const opts = { credentials: 'include', ...options };
+        const res = await fetch(url, opts);
+        if (res.status === 401) {
+            this.showLoginScreen();
+            throw new Error('Unauthorized');
+        }
+        return res;
+    }
+
     showLoginScreen() {
         this.hideAllScreens();
         document.getElementById('login-screen').style.display = 'flex';
@@ -908,14 +919,18 @@ class TimelineApp {
         const username = document.getElementById('new-username').value;
         
         try {
-            const response = await fetch('/api/users', {
+            const response = await this.apiFetch('/api/users', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ username }),
-                credentials: 'include'
+                body: JSON.stringify({ username })
             });
+            
+            if (!response.ok) {
+                this.showError('Request Failed', `HTTP ${response.status}`);
+                return;
+            }
             
             const data = await response.json();
             
@@ -929,7 +944,9 @@ class TimelineApp {
                 this.showError('User Creation Failed', data.message || 'Failed to create user');
             }
         } catch (error) {
-            this.showError('Network Error', 'Network error. Please try again.');
+            if (error.message !== 'Unauthorized') {
+                this.showError('Network Error', 'Network error. Please try again.');
+            }
         }
     }
 
@@ -942,14 +959,18 @@ class TimelineApp {
                 try {
                     const confirmationUsername = document.getElementById('confirmation-input').value;
                     
-                    const response = await fetch(`/api/users/${userId}`, {
+                    const response = await this.apiFetch(`/api/users/${userId}`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
                         },
-                        body: JSON.stringify({ confirmation_username: confirmationUsername }),
-                        credentials: 'include'
+                        body: JSON.stringify({ confirmation_username: confirmationUsername })
                     });
+                    
+                    if (!response.ok) {
+                        this.showError('Request Failed', `HTTP ${response.status}`);
+                        return;
+                    }
                     
                     const data = await response.json();
                     
@@ -960,7 +981,9 @@ class TimelineApp {
                         this.showError('User Deletion Failed', data.message || 'Failed to delete user');
                     }
                 } catch (error) {
-                    this.showError('Network Error', 'Network error. Please try again.');
+                    if (error.message !== 'Unauthorized') {
+                        this.showError('Network Error', 'Network error. Please try again.');
+                    }
                 }
             }
         );
@@ -1003,7 +1026,7 @@ class TimelineApp {
                 tagsEncrypted.push(await cryptoUtils.encrypt(tag, this.userPassword));
             }
             
-            const response = await fetch('/api/events', {
+            const response = await this.apiFetch('/api/events', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1013,9 +1036,13 @@ class TimelineApp {
                     description_encrypted: descriptionEncrypted,
                     event_timestamp: timestamp.toISOString(),
                     tag_names_encrypted: tagsEncrypted
-                }),
-                credentials: 'include'
+                })
             });
+            
+            if (!response.ok) {
+                this.showError('Request Failed', `HTTP ${response.status}`);
+                return;
+            }
             
             const data = await response.json();
             
@@ -1029,7 +1056,9 @@ class TimelineApp {
                 this.showError('Event Creation Failed', 'Failed to create event');
             }
         } catch (error) {
-            this.showError('Network Error', 'Network error. Please try again.');
+            if (error.message !== 'Unauthorized') {
+                this.showError('Network Error', 'Network error. Please try again.');
+            }
         }
     }
 
