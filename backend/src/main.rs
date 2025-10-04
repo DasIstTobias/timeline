@@ -1,6 +1,6 @@
 use axum::{
     extract::{State},
-    http::{header, HeaderMap, StatusCode, Method, HeaderValue},
+    http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -9,17 +9,19 @@ use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
-use tower_http::{cors::CorsLayer, services::ServeDir, limit::RequestBodyLimitLayer};
+use tower_http::{services::ServeDir, limit::RequestBodyLimitLayer};
 use uuid::Uuid;
 use regex::Regex;
 
 mod auth;
 mod crypto;
 mod models;
+mod tls;
 mod twofa;
 
 use auth::{create_session, verify_session, SessionData};
 use crypto::{generate_random_password, hash_password, verify_password};
+use tls::TlsConfig;
 use twofa::TwoFABruteForceProtection;
 
 // Helper function to validate input strings for null bytes and control characters
@@ -56,7 +58,8 @@ struct AppData {
     pending_2fa_secrets: Arc<RwLock<HashMap<Uuid, PendingSecret>>>, // user_id -> pending secret
     twofa_protection: Arc<TwoFABruteForceProtection>,
     login_rate_limiter: Arc<RwLock<HashMap<String, LoginRateLimit>>>, // IP -> rate limit data
-    require_tls: bool,
+    tls_config: Arc<RwLock<TlsConfig>>,
+    is_https_port: bool, // Track which port this instance is running on
 }
 
 // Rate limiting for login attempts
@@ -129,99 +132,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::fs::write("admin_credentials.txt", format!("Username: admin\nPassword: {}", admin_password)).await?;
     log::info!("Admin credentials written to admin_credentials.txt");
     
-    // Read configuration from environment
-    let require_tls = std::env::var("REQUIRE_TLS")
-        .unwrap_or_else(|_| "false".to_string())
-        .to_lowercase() == "true";
+    // Read TLS configuration from environment
+    let tls_config = Arc::new(RwLock::new(TlsConfig::from_env()));
+    tls_config.read().await.log_configuration();
     
-    if require_tls {
-        log::info!("TLS enforcement enabled - will require X-Forwarded-Proto: https");
-    } else {
-        log::info!("TLS enforcement disabled - HTTP connections allowed");
-    }
     
-    let app_state = AppState::new(AppData {
-        db,
-        sessions: Arc::new(RwLock::new(HashMap::new())),
-        pending_2fa: Arc::new(RwLock::new(HashMap::new())),
-        pending_2fa_secrets: Arc::new(RwLock::new(HashMap::new())),
-        twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
-        login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
-        require_tls,
-    });
-    
-    // Start background task to cleanup expired sessions
-    let sessions_for_cleanup = app_state.sessions.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await; // Run every hour
-            auth::cleanup_expired_sessions(&sessions_for_cleanup).await;
-            log::info!("Cleaned up expired sessions");
-        }
-    });
-    
-    // Start background task to cleanup expired pending 2FA sessions and secrets
-    let pending_2fa_cleanup = app_state.pending_2fa.clone();
-    let pending_secrets_cleanup = app_state.pending_2fa_secrets.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(300)).await; // Run every 5 minutes
-            
-            // Clean up pending 2FA sessions older than 5 minutes
-            let now = std::time::SystemTime::now();
-            let mut pending = pending_2fa_cleanup.write().await;
-            pending.retain(|_, auth| {
-                if let Ok(elapsed) = now.duration_since(auth.created_at) {
-                    elapsed.as_secs() <= 300
-                } else {
-                    false
-                }
-            });
-            drop(pending);
-            
-            // Clean up pending 2FA secrets older than 10 minutes
-            let mut secrets = pending_secrets_cleanup.write().await;
-            secrets.retain(|_, secret| {
-                if let Ok(elapsed) = now.duration_since(secret.created_at) {
-                    elapsed.as_secs() <= 600
-                } else {
-                    false
-                }
-            });
-            
-            log::info!("Cleaned up expired pending 2FA sessions and secrets");
-        }
-    });
-    
-    // Configure CORS based on environment variable
-    let cors_domain = std::env::var("CORS_DOMAIN")
-        .unwrap_or_else(|_| "localhost".to_string());
-    
-    let cors = if cors_domain == "localhost" {
-        log::info!("CORS configured for localhost (development mode)");
-        CorsLayer::new()
-            .allow_origin([
-                "http://localhost:8080".parse::<HeaderValue>().unwrap(),
-                "http://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
-                "https://localhost:8080".parse::<HeaderValue>().unwrap(),
-                "https://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
-            ])
-            .allow_methods([Method::GET, Method::POST])
-            .allow_credentials(true)
-            .allow_headers([header::CONTENT_TYPE, header::COOKIE])
-    } else {
-        log::info!("CORS configured for domain: {}", cors_domain);
-        CorsLayer::new()
-            .allow_origin([
-                format!("https://{}", cors_domain).parse::<HeaderValue>().unwrap(),
-                format!("http://{}", cors_domain).parse::<HeaderValue>().unwrap(),
-            ])
-            .allow_methods([Method::GET, Method::POST])
-            .allow_credentials(true)
-            .allow_headers([header::CONTENT_TYPE, header::COOKIE])
+    // Configure CORS based on domain configuration
+    let cors = {
+        let config = tls_config.read().await;
+        tls::create_cors_layer(&config.domains)
     };
     
-    let app = Router::new()
+    // Create base router (will be used for both HTTP and HTTPS)
+    let base_router = Router::new()
         .route("/", get(serve_index))
         .route("/api/login", post(login))
         .route("/api/verify-2fa", post(verify_2fa_login))
@@ -247,13 +170,111 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/2fa/enable", post(enable_2fa))
         .route("/api/2fa/disable", post(disable_2fa))
         .nest_service("/static", ServeDir::new("static"))
-        .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024)) // 2MB limit
-        .layer(cors)
-        .with_state(app_state);
+        .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024)); // 2MB limit
     
-    log::info!("Timeline server starting on port 8080");
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-    axum::serve(listener, app).await?;
+    // Check if we should start HTTPS server
+    let use_self_signed_ssl = tls_config.read().await.use_self_signed_ssl;
+    
+    if use_self_signed_ssl {
+        // Start both HTTP and HTTPS servers
+        log::info!("Starting HTTP and HTTPS servers");
+        
+        // Create HTTP app state
+        let http_app_state = AppState::new(AppData {
+            db: db.clone(),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            pending_2fa: Arc::new(RwLock::new(HashMap::new())),
+            pending_2fa_secrets: Arc::new(RwLock::new(HashMap::new())),
+            twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
+            login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+            tls_config: tls_config.clone(),
+            is_https_port: false,
+        });
+        
+        // Create HTTPS app state (shares same sessions/data)
+        let https_app_state = AppState::new(AppData {
+            db: db.clone(),
+            sessions: http_app_state.sessions.clone(),
+            pending_2fa: http_app_state.pending_2fa.clone(),
+            pending_2fa_secrets: http_app_state.pending_2fa_secrets.clone(),
+            twofa_protection: http_app_state.twofa_protection.clone(),
+            login_rate_limiter: http_app_state.login_rate_limiter.clone(),
+            tls_config: tls_config.clone(),
+            is_https_port: true,
+        });
+        
+        // Start cleanup tasks with HTTP app state
+        let sessions_for_cleanup = http_app_state.sessions.clone();
+        let pending_2fa_cleanup = http_app_state.pending_2fa.clone();
+        let pending_secrets_cleanup = http_app_state.pending_2fa_secrets.clone();
+        
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                auth::cleanup_expired_sessions(&sessions_for_cleanup).await;
+                log::info!("Cleaned up expired sessions");
+            }
+        });
+        
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+                let now = std::time::SystemTime::now();
+                let mut pending = pending_2fa_cleanup.write().await;
+                pending.retain(|_, auth| {
+                    if let Ok(elapsed) = now.duration_since(auth.created_at) {
+                        elapsed.as_secs() <= 300
+                    } else {
+                        false
+                    }
+                });
+                drop(pending);
+                
+                let mut secrets = pending_secrets_cleanup.write().await;
+                secrets.retain(|_, secret| {
+                    if let Ok(elapsed) = now.duration_since(secret.created_at) {
+                        elapsed.as_secs() <= 600
+                    } else {
+                        false
+                    }
+                });
+                log::info!("Cleaned up expired pending 2FA sessions and secrets");
+            }
+        });
+        
+        let http_app = base_router.clone().layer(cors.clone()).with_state(http_app_state);
+        let https_app = base_router.layer(cors).with_state(https_app_state);
+        
+        let tls_config_for_http = tls_config.clone();
+        
+        // Start HTTP server in separate task
+        tokio::spawn(async move {
+            if let Err(e) = tls::start_http_server(http_app, tls_config_for_http).await {
+                log::error!("HTTP server error: {}", e);
+            }
+        });
+        
+        // Start HTTPS server (this blocks)
+        tls::start_https_server(https_app).await?;
+    } else {
+        // Only start HTTP server (traditional mode)
+        let app_state = AppState::new(AppData {
+            db,
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            pending_2fa: Arc::new(RwLock::new(HashMap::new())),
+            pending_2fa_secrets: Arc::new(RwLock::new(HashMap::new())),
+            twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
+            login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+            tls_config: tls_config.clone(),
+            is_https_port: false,
+        });
+        
+        let app = base_router.layer(cors).with_state(app_state);
+        
+        log::info!("Timeline server starting on port 8080 (HTTP only)");
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+        axum::serve(listener, app).await?;
+    }
     
     Ok(())
 }
@@ -271,21 +292,10 @@ async fn get_user_info(
     })))
 }
 
-// Middleware to check TLS requirement
-fn check_tls_requirement(headers: &HeaderMap, require_tls: bool) -> Result<(), StatusCode> {
-    if !require_tls {
-        return Ok(());
-    }
-    
-    // Check X-Forwarded-Proto header set by reverse proxy
-    if let Some(proto) = headers.get("x-forwarded-proto") {
-        if proto.to_str().unwrap_or("") == "https" {
-            return Ok(());
-        }
-    }
-    
-    log::warn!("TLS required but request not over HTTPS");
-    Err(StatusCode::FORBIDDEN)
+// Check TLS requirement wrapper for route handlers
+async fn check_tls_for_handler(headers: &HeaderMap, state: &AppState) -> Result<(), StatusCode> {
+    let config = state.tls_config.read().await;
+    tls::check_tls_requirement(headers, config.require_tls, state.is_https_port)
 }
 
 // Helper function to get client IP address
@@ -376,7 +386,7 @@ async fn reset_login_rate_limit(
 }
 
 async fn serve_index(headers: HeaderMap, State(state): State<AppState>) -> Response {
-    if let Err(status) = check_tls_requirement(&headers, state.require_tls) {
+    if let Err(status) = check_tls_for_handler(&headers, &state).await {
         return (status, "TLS required").into_response();
     }
     
@@ -437,7 +447,7 @@ async fn login(
     Json(req): Json<LoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
     // Check TLS requirement
-    if let Err(status) = check_tls_requirement(&headers, state.require_tls) {
+    if let Err(status) = check_tls_for_handler(&headers, &state).await {
         return Err(status);
     }
     
@@ -1244,7 +1254,7 @@ async fn verify_2fa_login(
     Json(req): Json<Verify2FALoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
     // Check TLS requirement
-    if let Err(status) = check_tls_requirement(&headers, state.require_tls) {
+    if let Err(status) = check_tls_for_handler(&headers, &state).await {
         return Err(status);
     }
     

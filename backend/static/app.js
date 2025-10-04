@@ -29,9 +29,18 @@ class TimelineApp {
         this.setupEventListeners();
         this.applyTheme();
         this.checkAuthStatus();
+        this.checkHttpWarning();
         
         // Update timers every second
         setInterval(() => this.updateEventTimers(), 1000);
+    }
+    
+    checkHttpWarning() {
+        // Show warning if using HTTP instead of HTTPS
+        const httpWarning = document.getElementById('http-warning');
+        if (httpWarning && window.location.protocol === 'http:') {
+            httpWarning.style.display = 'block';
+        }
     }
 
     setupEventListeners() {
