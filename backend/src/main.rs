@@ -206,6 +206,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "http://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
                 "https://localhost:8080".parse::<HeaderValue>().unwrap(),
                 "https://127.0.0.1:8080".parse::<HeaderValue>().unwrap(),
+                "http://localhost:8443".parse::<HeaderValue>().unwrap(),
+                "http://127.0.0.1:8443".parse::<HeaderValue>().unwrap(),
+                "https://localhost:8443".parse::<HeaderValue>().unwrap(),
+                "https://127.0.0.1:8443".parse::<HeaderValue>().unwrap(),
             ])
             .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
             .allow_credentials(true)
@@ -276,7 +280,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     if use_self_signed_ssl {
         log::info!("Starting HTTPS server with self-signed certificate on port 8443");
-        log::info!("Starting HTTP redirect server on port 8080");
         
         // Generate self-signed certificate
         let tls_config = tls::generate_self_signed_cert().await?;
@@ -284,17 +287,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Start HTTPS server on port 8443
         let https_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8443));
         let https_server = axum_server::bind_rustls(https_addr, tls_config)
-            .serve(app.into_make_service());
+            .serve(app.clone().into_make_service());
         
-        // Start HTTP redirect server on port 8080
-        let http_app = Router::new()
-            .fallback(http_redirect_handler);
-        let http_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8080));
-        let http_server = axum_server::bind(http_addr)
-            .serve(http_app.into_make_service());
-        
-        // Run both servers concurrently
-        tokio::try_join!(https_server, http_server)?;
+        // Start HTTP server on port 8080
+        if require_tls {
+            // If TLS is required, redirect HTTP to HTTPS
+            log::info!("Starting HTTP redirect server on port 8080 (REQUIRE_TLS=true)");
+            let http_app = Router::new()
+                .fallback(http_redirect_handler);
+            let http_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8080));
+            let http_server = axum_server::bind(http_addr)
+                .serve(http_app.into_make_service());
+            
+            // Run both servers concurrently
+            tokio::try_join!(https_server, http_server)?;
+        } else {
+            // If TLS is not required, run both HTTP and HTTPS without redirect
+            log::info!("Starting HTTP server on port 8080 (REQUIRE_TLS=false, no redirect)");
+            let http_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8080));
+            let http_server = axum_server::bind(http_addr)
+                .serve(app.into_make_service());
+            
+            // Run both servers concurrently
+            tokio::try_join!(https_server, http_server)?;
+        }
     } else {
         log::info!("Starting HTTP server on port 8080 (self-signed SSL disabled)");
         let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
@@ -454,7 +470,7 @@ async fn serve_index(headers: HeaderMap, State(state): State<AppState>) -> Respo
     // Content Security Policy - only allow local resources
     response_headers.insert(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        "default-src 'self'; script-src 'self' 'unsafe-hashes'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
             .parse()
             .unwrap(),
     );
