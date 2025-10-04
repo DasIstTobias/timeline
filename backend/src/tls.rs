@@ -175,26 +175,6 @@ pub fn check_domain_allowed(headers: &HeaderMap, allowed_domains: &[String]) -> 
     Ok(())
 }
 
-/// Create middleware to check domain and TLS requirements
-pub async fn domain_tls_middleware(
-    headers: HeaderMap,
-    request: axum::extract::Request,
-    next: axum::middleware::Next,
-    tls_config: Arc<RwLock<TlsConfig>>,
-    is_https_port: bool,
-) -> Result<axum::response::Response, StatusCode> {
-    let config = tls_config.read().await;
-    
-    // Check domain is allowed
-    check_domain_allowed(&headers, &config.domains)?;
-    
-    // Check TLS requirement
-    check_tls_requirement(&headers, config.require_tls, is_https_port)?;
-    
-    drop(config);
-    Ok(next.run(request).await)
-}
-
 /// Start HTTP server on port 8080
 pub async fn start_http_server(
     app: Router,

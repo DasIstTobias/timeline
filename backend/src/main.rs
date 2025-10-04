@@ -292,18 +292,7 @@ async fn get_user_info(
     })))
 }
 
-// Check domain and TLS requirements for route handlers
-async fn check_domain_and_tls(headers: &HeaderMap, state: &AppState) -> Result<(), StatusCode> {
-    let config = state.tls_config.read().await;
-    
-    // Check domain is allowed
-    tls::check_domain_allowed(headers, &config.domains)?;
-    
-    // Check TLS requirement
-    tls::check_tls_requirement(headers, config.require_tls, state.is_https_port)?;
-    
-    Ok(())
-}
+
 
 // Helper function to get client IP address
 fn get_client_ip(headers: &HeaderMap) -> String {
