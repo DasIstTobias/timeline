@@ -365,6 +365,17 @@ fn check_tls_requirement(headers: &HeaderMap, require_tls: bool) -> Result<(), S
         }
     }
     
+    // Check if connecting to HTTPS port directly (self-signed SSL)
+    // When using self-signed SSL, requests to port 8443 are HTTPS
+    if let Some(host) = headers.get(header::HOST) {
+        if let Ok(host_str) = host.to_str() {
+            // If the host header includes port 8443, it's HTTPS
+            if host_str.contains(":8443") {
+                return Ok(());
+            }
+        }
+    }
+    
     log::warn!("TLS required but request not over HTTPS");
     Err(StatusCode::FORBIDDEN)
 }
