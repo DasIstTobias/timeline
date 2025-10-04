@@ -58,6 +58,8 @@ struct AppData {
     twofa_protection: Arc<TwoFABruteForceProtection>,
     login_rate_limiter: Arc<RwLock<HashMap<String, LoginRateLimit>>>, // IP -> rate limit data
     require_tls: bool,
+    use_self_signed_ssl: bool,
+    allowed_domains: Vec<String>,
 }
 
 // Rate limiting for login attempts
@@ -135,11 +137,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "false".to_string())
         .to_lowercase() == "true";
     
+    let use_self_signed_ssl = std::env::var("USE_SELF_SIGNED_SSL")
+        .unwrap_or_else(|_| "true".to_string())
+        .to_lowercase() == "true";
+    
+    // Read DOMAIN configuration (replaces CORS_DOMAIN for stricter enforcement)
+    let domain_config = std::env::var("DOMAIN")
+        .or_else(|_| std::env::var("CORS_DOMAIN"))
+        .unwrap_or_else(|_| "localhost".to_string());
+    
+    let allowed_domains: Vec<String> = if domain_config == "localhost" {
+        vec!["localhost".to_string()]
+    } else {
+        domain_config.split(',').map(|s| s.trim().to_string()).collect()
+    };
+    
     if require_tls {
-        log::info!("TLS enforcement enabled - will require X-Forwarded-Proto: https");
+        log::info!("TLS enforcement enabled");
     } else {
         log::info!("TLS enforcement disabled - HTTP connections allowed");
     }
+    
+    log::info!("Domain restriction configured for: {:?}", allowed_domains);
     
     let app_state = AppState::new(AppData {
         db,
@@ -149,6 +168,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
         login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
         require_tls,
+        use_self_signed_ssl,
+        allowed_domains: allowed_domains.clone(),
     });
     
     // Start background task to cleanup expired sessions
@@ -194,11 +215,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     
-    // Configure CORS based on environment variable
-    let cors_domain = std::env::var("CORS_DOMAIN")
-        .unwrap_or_else(|_| "localhost".to_string());
-    
-    let cors = if cors_domain == "localhost" {
+    // Configure CORS based on allowed domains
+    let cors = if allowed_domains.contains(&"localhost".to_string()) {
         log::info!("CORS configured for localhost (development mode)");
         CorsLayer::new()
             .allow_origin([
@@ -215,17 +233,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .allow_credentials(true)
             .allow_headers([header::CONTENT_TYPE, header::COOKIE])
     } else {
-        // Parse CORS_DOMAIN as comma-separated list
+        // Build CORS origins from allowed domains
         let mut origins = Vec::new();
-        for entry in cors_domain.split(',') {
-            let entry = entry.trim();
+        for domain in &allowed_domains {
+            let entry = domain.trim();
             if entry.starts_with("http://") || entry.starts_with("https://") {
                 // Full URL provided, use as-is
                 origins.push(entry.to_string());
             } else {
                 // Bare host[:port] provided, create both http and https versions
-                origins.push(format!("http://{}", entry));
-                origins.push(format!("https://{}", entry));
+                // Add both port 8080 and 8443 variants
+                if entry.contains(':') {
+                    origins.push(format!("http://{}", entry));
+                    origins.push(format!("https://{}", entry));
+                } else {
+                    origins.push(format!("http://{}:8080", entry));
+                    origins.push(format!("https://{}:8080", entry));
+                    origins.push(format!("http://{}:8443", entry));
+                    origins.push(format!("https://{}:8443", entry));
+                }
             }
         }
         
@@ -353,30 +379,53 @@ async fn get_user_info(
 }
 
 // Middleware to check TLS requirement
-fn check_tls_requirement(headers: &HeaderMap, require_tls: bool) -> Result<(), StatusCode> {
+fn check_tls_requirement(headers: &HeaderMap, require_tls: bool, use_self_signed_ssl: bool) -> Result<(), StatusCode> {
     if !require_tls {
         return Ok(());
     }
     
-    // Check X-Forwarded-Proto header set by reverse proxy
+    // When using self-signed SSL, the HTTPS server handles TLS automatically
+    // No need to check headers since the connection itself is already TLS
+    if use_self_signed_ssl {
+        return Ok(());
+    }
+    
+    // Check X-Forwarded-Proto header set by reverse proxy (external SSL)
     if let Some(proto) = headers.get("x-forwarded-proto") {
         if proto.to_str().unwrap_or("") == "https" {
             return Ok(());
         }
     }
     
-    // Check if connecting to HTTPS port directly (self-signed SSL)
-    // When using self-signed SSL, requests to port 8443 are HTTPS
-    if let Some(host) = headers.get(header::HOST) {
-        if let Ok(host_str) = host.to_str() {
-            // If the host header includes port 8443, it's HTTPS
-            if host_str.contains(":8443") {
-                return Ok(());
-            }
+    log::warn!("TLS required but request not over HTTPS");
+    Err(StatusCode::FORBIDDEN)
+}
+
+// Check if the request is from an allowed domain
+fn check_domain_restriction(headers: &HeaderMap, allowed_domains: &[String]) -> Result<(), StatusCode> {
+    if allowed_domains.is_empty() || allowed_domains.contains(&"localhost".to_string()) {
+        // Localhost mode - allow all origins (development)
+        return Ok(());
+    }
+    
+    // Get the Host header
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    
+    // Extract hostname without port
+    let hostname = host.split(':').next().unwrap_or(host);
+    
+    // Check if hostname matches any allowed domain
+    for allowed in allowed_domains {
+        let allowed_host = allowed.split(':').next().unwrap_or(allowed);
+        if hostname == allowed_host || hostname == "localhost" || hostname == "127.0.0.1" {
+            return Ok(());
         }
     }
     
-    log::warn!("TLS required but request not over HTTPS");
+    log::warn!("Access denied from unauthorized domain: {}", host);
     Err(StatusCode::FORBIDDEN)
 }
 
@@ -468,7 +517,12 @@ async fn reset_login_rate_limit(
 }
 
 async fn serve_index(headers: HeaderMap, State(state): State<AppState>) -> Response {
-    if let Err(status) = check_tls_requirement(&headers, state.require_tls) {
+    // Check domain restriction first
+    if let Err(status) = check_domain_restriction(&headers, &state.allowed_domains) {
+        return (status, "Access denied from unauthorized domain").into_response();
+    }
+    
+    if let Err(status) = check_tls_requirement(&headers, state.require_tls, state.use_self_signed_ssl) {
         return (status, "TLS required").into_response();
     }
     
@@ -528,8 +582,13 @@ async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
+    // Check domain restriction
+    if let Err(status) = check_domain_restriction(&headers, &state.allowed_domains) {
+        return Err(status);
+    }
+    
     // Check TLS requirement
-    if let Err(status) = check_tls_requirement(&headers, state.require_tls) {
+    if let Err(status) = check_tls_requirement(&headers, state.require_tls, state.use_self_signed_ssl) {
         return Err(status);
     }
     
@@ -1335,8 +1394,13 @@ async fn verify_2fa_login(
     State(state): State<AppState>,
     Json(req): Json<Verify2FALoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
+    // Check domain restriction
+    if let Err(status) = check_domain_restriction(&headers, &state.allowed_domains) {
+        return Err(status);
+    }
+    
     // Check TLS requirement
-    if let Err(status) = check_tls_requirement(&headers, state.require_tls) {
+    if let Err(status) = check_tls_requirement(&headers, state.require_tls, state.use_self_signed_ssl) {
         return Err(status);
     }
     

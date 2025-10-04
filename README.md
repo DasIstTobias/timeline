@@ -139,37 +139,39 @@ The application will be available at `http://localhost:8080`
 ### Environment Variables
 - `DATABASE_URL`: PostgreSQL connection string
 - `RUST_LOG`: Logging level configuration
-- `CORS_DOMAIN`: Comma-separated list of allowed origins (see CORS Configuration below)
-- `REQUIRE_TLS`: Set to `true` to enforce HTTPS (checks X-Forwarded-Proto header)
+- `DOMAIN`: Comma-separated list of allowed domains with strict enforcement (see Domain Configuration below)
+- `REQUIRE_TLS`: Set to `true` to enforce HTTPS
 - `USE_SELF_SIGNED_SSL`: Set to `true` to use self-signed SSL certificates (default: `true`)
 
-### CORS Configuration
+### Domain Configuration
 
-The `CORS_DOMAIN` environment variable controls which origins can access the API. It accepts:
-- `localhost` (default): Allows http://localhost:8080, http://127.0.0.1:8080, and their HTTPS variants
-- A single domain/IP with optional port: `example.com` or `192.168.1.100:8080`
-- Multiple comma-separated entries: `example.com,192.168.1.100:8080`
-- Full URLs: `https://example.com,http://192.168.1.100:8080`
+The `DOMAIN` environment variable enforces strict domain access control. Only requests from specified domains will be accepted.
 
-When a bare host[:port] is provided (without scheme), both HTTP and HTTPS variants are allowed.
+**Important:** This replaces the previous `CORS_DOMAIN` variable and provides stricter security by rejecting requests from unauthorised domains at the application level, not just via browser CORS policies.
+
+Accepted formats:
+- `localhost` (default): Allows localhost and 127.0.0.1 on any port
+- Single domain/IP: `example.com` or `192.168.1.100`
+- Multiple comma-separated domains: `example.com,192.168.1.100,timeline.local`
+
+When a bare hostname is provided (without port), the application automatically allows both port 8080 and 8443.
 
 Examples:
 ```bash
-# Allow localhost only (default)
-CORS_DOMAIN=localhost
+# Allow localhost only (default - for development)
+DOMAIN=localhost
 
 # Allow a specific domain
-CORS_DOMAIN=timeline.example.com
+DOMAIN=timeline.example.com
 
-# Allow local network access
-CORS_DOMAIN=192.168.178.172:8080
+# Allow local network access from specific IP
+DOMAIN=192.168.178.172
 
-# Allow multiple origins
-CORS_DOMAIN=timeline.example.com,192.168.1.100:8080
-
-# Mix of full URLs and bare hosts
-CORS_DOMAIN=https://timeline.example.com,192.168.1.100:8080
+# Allow multiple domains
+DOMAIN=timeline.example.com,192.168.1.100,timeline.local
 ```
+
+**Security Note:** Unlike browser-only CORS restrictions, `DOMAIN` enforcement blocks unauthorised requests at the server level, preventing access from any domain not explicitly listed.
 
 ### SSL/TLS Configuration
 
@@ -179,7 +181,7 @@ Timeline includes built-in support for HTTPS using self-signed SSL certificates,
 
 By default, Timeline generates self-signed SSL certificates automatically:
 - **HTTPS server**: Runs on port 8443
-- **HTTP server**: Runs on port 8080 and redirects all traffic to HTTPS
+- **HTTP server**: Runs on port 8080 (redirects to HTTPS when `REQUIRE_TLS=true`)
 - **Configuration**: `USE_SELF_SIGNED_SSL=true` (default)
 
 To access the application:
@@ -187,6 +189,10 @@ To access the application:
 https://localhost:8443
 https://your-ip:8443
 ```
+
+**TLS Enforcement Behaviour:**
+- When `REQUIRE_TLS=true` (default): HTTP requests are redirected to HTTPS
+- When `REQUIRE_TLS=false`: Both HTTP and HTTPS work independently (for development/testing)
 
 **Note**: Browsers will show a security warning for self-signed certificates. This is expected. Click "Advanced" and "Proceed" to continue.
 
@@ -204,7 +210,7 @@ Example docker-compose.yml configuration:
 environment:
   REQUIRE_TLS: "true"
   USE_SELF_SIGNED_SSL: "false"
-  CORS_DOMAIN: your-domain.com
+  DOMAIN: your-domain.com
 ```
 
 #### HTTP Warning Banner

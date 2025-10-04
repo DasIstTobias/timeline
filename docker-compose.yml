@@ -24,13 +24,15 @@ services:
     environment:
       DATABASE_URL: postgresql://timeline_user:timeline_password@database:5432/timeline
       RUST_LOG: info
-      # CORS Domain Configuration
-      # Set to "localhost" for local development/testing
-      # Set to your production domain (e.g., "timeline.example.com") for production
-      CORS_DOMAIN: localhost
+      # Domain Configuration
+      # Set to "localhost" for local development/testing (allows localhost and 127.0.0.1)
+      # Set to your domain(s) for production (e.g., "timeline.example.com" or "192.168.1.100,timeline.local")
+      # This enforces both CORS and domain access restrictions
+      # Only requests from specified domains will be accepted
+      DOMAIN: localhost
       # TLS Enforcement
-      # Set to "true" to require TLS connections (checks X-Forwarded-Proto header when behind reverse proxy)
-      # Set to "false" to allow HTTP
+      # Set to "true" to require TLS connections
+      # Set to "false" to allow HTTP (for development only)
       REQUIRE_TLS: "true"
       # Self-Signed SSL Certificate
       # Set to "true" to use automatically generated self-signed SSL certificate (HTTPS on port 8443, HTTP redirects from port 8080)
