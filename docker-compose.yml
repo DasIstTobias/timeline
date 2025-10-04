@@ -20,6 +20,7 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+      - "8443:8443"
     environment:
       DATABASE_URL: postgresql://timeline_user:timeline_password@database:5432/timeline
       RUST_LOG: info
@@ -27,10 +28,14 @@ services:
       # Set to "localhost" for local development/testing
       # Set to your production domain (e.g., "timeline.example.com") for production
       CORS_DOMAIN: localhost
-      # TLS Enforcement (when behind reverse proxy)
-      # Set to "true" to require TLS connections (checks X-Forwarded-Proto header)
-      # Set to "false" to allow HTTP (default for local development)
-      REQUIRE_TLS: "false"
+      # TLS Enforcement
+      # Set to "true" to require TLS connections (checks X-Forwarded-Proto header when behind reverse proxy)
+      # Set to "false" to allow HTTP
+      REQUIRE_TLS: "true"
+      # Self-Signed SSL Certificate
+      # Set to "true" to use automatically generated self-signed SSL certificate (HTTPS on port 8443, HTTP redirects from port 8080)
+      # Set to "false" if using external reverse proxy with valid SSL certificate
+      USE_SELF_SIGNED_SSL: "true"
     depends_on:
       - database
     networks:

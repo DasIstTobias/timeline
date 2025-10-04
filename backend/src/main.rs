@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State},
+    extract::State,
     http::{header, HeaderMap, StatusCode, Method, HeaderValue},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -16,6 +16,7 @@ use regex::Regex;
 mod auth;
 mod crypto;
 mod models;
+mod tls;
 mod twofa;
 
 use auth::{create_session, verify_session, SessionData};
@@ -268,11 +269,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(cors)
         .with_state(app_state);
     
-    log::info!("Timeline server starting on port 8080");
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-    axum::serve(listener, app).await?;
+    // Check if self-signed SSL should be used
+    let use_self_signed_ssl = std::env::var("USE_SELF_SIGNED_SSL")
+        .unwrap_or_else(|_| "true".to_string())
+        .to_lowercase() == "true";
+    
+    if use_self_signed_ssl {
+        log::info!("Starting HTTPS server with self-signed certificate on port 8443");
+        log::info!("Starting HTTP redirect server on port 8080");
+        
+        // Generate self-signed certificate
+        let tls_config = tls::generate_self_signed_cert().await?;
+        
+        // Start HTTPS server on port 8443
+        let https_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8443));
+        let https_server = axum_server::bind_rustls(https_addr, tls_config)
+            .serve(app.into_make_service());
+        
+        // Start HTTP redirect server on port 8080
+        let http_app = Router::new()
+            .fallback(http_redirect_handler);
+        let http_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8080));
+        let http_server = axum_server::bind(http_addr)
+            .serve(http_app.into_make_service());
+        
+        // Run both servers concurrently
+        tokio::try_join!(https_server, http_server)?;
+    } else {
+        log::info!("Starting HTTP server on port 8080 (self-signed SSL disabled)");
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+        axum::serve(listener, app).await?;
+    }
     
     Ok(())
+}
+
+// HTTP to HTTPS redirect handler
+async fn http_redirect_handler(uri: axum::http::Uri, headers: HeaderMap) -> Response {
+    // Extract host from headers
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("localhost");
+    
+    // Remove port from host if present and add 8443
+    let host_without_port = host.split(':').next().unwrap_or(host);
+    let https_uri = format!("https://{}:8443{}", host_without_port, uri.path_and_query().map(|p| p.as_str()).unwrap_or("/"));
+    
+    (
+        StatusCode::MOVED_PERMANENTLY,
+        [(header::LOCATION, https_uri)],
+        "Redirecting to HTTPS"
+    ).into_response()
 }
 
 async fn get_user_info(

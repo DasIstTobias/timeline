@@ -141,6 +141,7 @@ The application will be available at `http://localhost:8080`
 - `RUST_LOG`: Logging level configuration
 - `CORS_DOMAIN`: Comma-separated list of allowed origins (see CORS Configuration below)
 - `REQUIRE_TLS`: Set to `true` to enforce HTTPS (checks X-Forwarded-Proto header)
+- `USE_SELF_SIGNED_SSL`: Set to `true` to use self-signed SSL certificates (default: `true`)
 
 ### CORS Configuration
 
@@ -170,30 +171,50 @@ CORS_DOMAIN=timeline.example.com,192.168.1.100:8080
 CORS_DOMAIN=https://timeline.example.com,192.168.1.100:8080
 ```
 
-### Secure Context Requirement (HTTPS)
+### SSL/TLS Configuration
 
-**Important**: The Web Crypto API (used for client-side encryption) is only available in secure contexts:
-- HTTPS connections
-- `localhost` / `127.0.0.1` (even over HTTP)
+Timeline includes built-in support for HTTPS using self-signed SSL certificates, enabled by default.
 
-When accessing the app over HTTP from a non-localhost IP address (e.g., `http://192.168.x.x:8080`), the browser will not provide the Web Crypto API, and encryption/decryption will fail. A warning banner will appear at the top of the page.
+#### Self-Signed SSL (Default)
 
-**Solutions:**
-1. **For production**: Use HTTPS with a reverse proxy (nginx, Caddy, etc.) and set `REQUIRE_TLS=true`
-2. **For local testing**: Access via `http://localhost:8080` or `http://127.0.0.1:8080`
-3. **For LAN access**: Set up a reverse proxy with SSL/TLS termination
+By default, Timeline generates self-signed SSL certificates automatically:
+- **HTTPS server**: Runs on port 8443
+- **HTTP server**: Runs on port 8080 and redirects all traffic to HTTPS
+- **Configuration**: `USE_SELF_SIGNED_SSL=true` (default)
 
-When using a reverse proxy with HTTPS, ensure it sets the `X-Forwarded-Proto: https` header, and configure:
-```bash
-REQUIRE_TLS=true
-CORS_DOMAIN=your-domain.com
+To access the application:
+```
+https://localhost:8443
+https://your-ip:8443
 ```
 
-For local HTTP testing without encryption (not recommended):
-```bash
-REQUIRE_TLS=false
-CORS_DOMAIN=192.168.x.x:8080
+**Note**: Browsers will show a security warning for self-signed certificates. This is expected. Click "Advanced" and "Proceed" to continue.
+
+#### Using External Reverse Proxy
+
+If you prefer to use an external reverse proxy (nginx, Caddy, Traefik) with valid SSL certificates:
+
+1. Set `USE_SELF_SIGNED_SSL=false` in `docker-compose.yml`
+2. Configure your reverse proxy to forward to port 8080
+3. Set `REQUIRE_TLS=true` to enforce HTTPS
+4. Ensure reverse proxy sets `X-Forwarded-Proto: https` header
+
+Example docker-compose.yml configuration:
+```yaml
+environment:
+  REQUIRE_TLS: "true"
+  USE_SELF_SIGNED_SSL: "false"
+  CORS_DOMAIN: your-domain.com
 ```
+
+#### HTTP Warning Banner
+
+When accessing the application over HTTP (insecure connection), a red warning banner will appear:
+
+⚠️ **WARNING: Unencrypted HTTP Connection** ⚠️
+*This connection is not secure. Please use HTTPS for encrypted communication.*
+
+This ensures users are aware they are using an insecure connection.
 
 ### Container Configuration
 - Database: PostgreSQL 17 with persistent volume storage

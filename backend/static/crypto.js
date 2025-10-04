@@ -7,12 +7,12 @@ class CryptoUtils {
         this.available = !!(window.isSecureContext && window.crypto && window.crypto.subtle);
         
         if (!this.available) {
-            console.error('Web Crypto API (window.crypto.subtle) is unavailable. Use HTTPS or localhost.');
+            console.error('Warning: Unencrypted HTTP connection detected. This connection is not secure.');
             try {
                 const banner = document.createElement('div');
-                banner.id = 'crypto-warning';
-                banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;padding:10px;background:#ffcc00;color:#000;text-align:center;font-family:sans-serif;';
-                banner.textContent = 'Warning: Web Crypto is not available on this origin. Use HTTPS or localhost.';
+                banner.id = 'http-warning';
+                banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;padding:12px;background:#dc3545;color:#fff;text-align:center;font-family:sans-serif;font-weight:bold;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+                banner.innerHTML = '⚠️ WARNING: Unencrypted HTTP Connection ⚠️<br><small style="font-weight:normal;">This connection is not secure. Please use HTTPS for encrypted communication.</small>';
                 if (document.readyState === 'loading') {
                     document.addEventListener('DOMContentLoaded', () => {
                         if (document.body) document.body.prepend(banner);
@@ -21,7 +21,7 @@ class CryptoUtils {
                     if (document.body) document.body.prepend(banner);
                 }
             } catch (e) {
-                console.error('Failed to show crypto warning banner:', e);
+                console.error('Failed to show HTTP warning banner:', e);
             }
         }
     }
