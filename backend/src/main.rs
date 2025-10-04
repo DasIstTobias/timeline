@@ -292,10 +292,17 @@ async fn get_user_info(
     })))
 }
 
-// Check TLS requirement wrapper for route handlers
-async fn check_tls_for_handler(headers: &HeaderMap, state: &AppState) -> Result<(), StatusCode> {
+// Check domain and TLS requirements for route handlers
+async fn check_domain_and_tls(headers: &HeaderMap, state: &AppState) -> Result<(), StatusCode> {
     let config = state.tls_config.read().await;
-    tls::check_tls_requirement(headers, config.require_tls, state.is_https_port)
+    
+    // Check domain is allowed
+    tls::check_domain_allowed(headers, &config.domains)?;
+    
+    // Check TLS requirement
+    tls::check_tls_requirement(headers, config.require_tls, state.is_https_port)?;
+    
+    Ok(())
 }
 
 // Helper function to get client IP address
@@ -386,9 +393,13 @@ async fn reset_login_rate_limit(
 }
 
 async fn serve_index(headers: HeaderMap, State(state): State<AppState>) -> Response {
-    if let Err(status) = check_tls_for_handler(&headers, &state).await {
+    // TODO: Re-enable domain checking once HTTP/2 header handling is fixed
+    // For now, just check TLS requirements
+    let config = state.tls_config.read().await;
+    if let Err(status) = tls::check_tls_requirement(&headers, config.require_tls, state.is_https_port) {
         return (status, "TLS required").into_response();
     }
+    drop(config);
     
     let html = tokio::fs::read_to_string("static/index.html").await
         .unwrap_or_else(|_| include_str!("../static/index.html").to_string());
@@ -446,10 +457,10 @@ async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
-    // Check TLS requirement
-    if let Err(status) = check_tls_for_handler(&headers, &state).await {
-        return Err(status);
-    }
+    // Check TLS requirements (domain checking disabled for now)
+    let config = state.tls_config.read().await;
+    tls::check_tls_requirement(&headers, config.require_tls, state.is_https_port)?;
+    drop(config);
     
     // Get client IP for rate limiting
     let client_ip = get_client_ip(&headers);
@@ -1253,10 +1264,10 @@ async fn verify_2fa_login(
     State(state): State<AppState>,
     Json(req): Json<Verify2FALoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
-    // Check TLS requirement
-    if let Err(status) = check_tls_for_handler(&headers, &state).await {
-        return Err(status);
-    }
+    // Check TLS requirements (domain checking disabled for now)
+    let config = state.tls_config.read().await;
+    tls::check_tls_requirement(&headers, config.require_tls, state.is_https_port)?;
+    drop(config);
     
     // Get client identifier for brute-force protection (use IP address)
     let client_ip = get_client_ip(&headers);

@@ -140,9 +140,20 @@ pub fn check_tls_requirement(
 
 /// Check if domain is allowed based on Host header
 pub fn check_domain_allowed(headers: &HeaderMap, allowed_domains: &[String]) -> Result<(), StatusCode> {
+    // Try to get host from Host header first
     let host_header = headers.get(header::HOST)
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
+    
+    // Debug: log all headers if Host is missing
+    if host_header.is_empty() {
+        log::debug!("Host header missing. Available headers:");
+        for (name, value) in headers.iter() {
+            log::debug!("  {}: {:?}", name, value);
+        }
+        log::warn!("No Host header provided, blocking request");
+        return Err(StatusCode::FORBIDDEN);
+    }
     
     // Extract hostname without port
     let hostname = host_header.split(':').next().unwrap_or(host_header);
