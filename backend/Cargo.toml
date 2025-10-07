@@ -26,3 +26,6 @@ regex = "1.10"
 totp-lite = "2.0"
 sha1 = "0.10"
 urlencoding = "2.1"
+axum-server = { version = "0.6", features = ["tls-rustls"] }
+rcgen = "0.12"
+rustls = "0.22"
