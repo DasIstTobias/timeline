@@ -1,286 +1,125 @@
-# Timeline
+# <img src="backend/static/favicon.ico" alt="Timeline Logo" width="32" height="32" style="vertical-align: middle;"> Timeline
 
-A secure personal timeline application for documenting and managing life events. Built with Rust backend, PostgreSQL database, and vanilla HTML/CSS/JavaScript frontend, all containerised with Docker for streamlined deployment.
+Timeline is a secure personal timeline application for documenting and managing life events with client-side encryption.
 
-## Overview
+## Features
 
-Timeline enables users to create, manage, and visualise personal events in a chronological format. The application prioritises security through zero-knowledge encryption, ensuring all user data remains private and accessible only to the account holder.
+### Security
+- Client-side zero-knowledge encryption
+- All data encrypted in the browser before transmission
+- Passwords hashed with bcrypt
+- Session-based authentication
+- Optional two-factor authentication (2FA)
 
-## Key Features
+### Event Management
+- Create events with title, description, and timestamp
+- Live timers showing elapsed time since each event
+- Custom or current timestamps for events
+- Delete individual events
+- Colour-coded tags for organisation and filtering
 
-### Security and Privacy
-- **Zero-knowledge encryption**: All user data is encrypted client-side before transmission
-- **Secure authentication**: Session-based authentication with server-side validation
-- **Password protection**: All passwords are hashed using bcrypt
-- **Client-side data processing**: Decryption and encryption occur exclusively in the browser
-- **No persistent sessions**: Session data is stored in memory and cleared on server restart
+### Timeline Interface
+- Chronological vertical timeline display
+- Real-time search across event content
+- Filter events by tags
+- Time separators (daily, weekly, monthly, yearly)
+- Responsive design for all devices
 
-### User Experience
-- **Timeline visualisation**: Vertical timeline interface with chronological event display
-- **Live timers**: Real-time countdown showing elapsed time since each event
-- **Event management**: Create, view, and delete events with title, description, timestamp, and tags
-- **Search and filtering**: Search events by content and filter by tags
-- **Customisable settings**: Personalise display name, theme, time format, and date format
-- **Data portability**: Export and import timeline data as JSON files
-- **Time separators**: Configurable visual separators (daily, weekly, monthly, yearly) between timeline periods
+### Personalisation
+- Display name and profile picture
+- Theme selection (light, dark, system preference)
+- Customisable accent colour
+- Time format (12-hour or 24-hour)
+- Date format preferences
 
-### Administrative Features
-- **User management**: Admin dashboard for creating and removing user accounts
-- **Secure user creation**: Automatic password generation with one-time display
-- **Account security**: Multi-step confirmation process for user deletion
+### Data Management
+- Export timeline data as JSON
+- Import events from JSON files
+- Export filtered events as PDF
+- Personal notes feature with autosave
 
-### Technical Capabilities
-- **Responsive design**: Optimised for all device sizes and screen orientations
-- **Theme support**: Light, dark, and system preference themes
-- **Flexible formatting**: Multiple time and date format options
-- **Tag system**: Colour-coded tags for event categorisation and filtering
-- **Containerised deployment**: Complete Docker-based setup for easy installation
+### Administration
+- Admin dashboard for user management
+- Create user accounts with secure password generation
+- Multi-step user deletion process
+- Admin password management
 
-## Quick Start
+## Getting Started
 
-### Prerequisites
+### Requirements
 - Docker and Docker Compose
 - Git
-- sudo privileges (for Docker commands)
 
 ### Installation
 
 1. Clone the repository:
 ```bash
-git clone [repository url]
+git clone https://github.com/DasIstTobias/timeline.git
 cd timeline
 ```
 
 2. Start the application:
 ```bash
-sudo docker compose up -d
+docker compose up -d
 ```
 
-3. Access admin credentials:
+3. Retrieve admin credentials:
 ```bash
 cat admin_credentials.txt
 ```
 
-The application will be available at `http://localhost:8080`
+4. Access the application at `http://localhost:8080`
 
-### Initial Setup
+### Initial Configuration
 
-1. Access the application using the admin credentials from `admin_credentials.txt`
+1. Log in with the admin credentials
 2. Create user accounts through the admin dashboard
-3. Users should change their passwords after first login
-4. Configure user settings including display name, theme, and date/time preferences
+3. Users should change their password after first login
+4. Configure personal settings (theme, formats, display name)
 
-## Usage Guide
+## Usage
 
-### For Users
+### Creating Events
 
-#### Creating Events
-1. Click "Add Event" in the bottom toolbar
-2. Enter event title and description (required fields)
-3. Set timestamp using "Now" or "Custom" time selection
-4. Add optional tags for categorisation
-5. Click "Create" to add the event to your timeline
+1. Click the "Add Event" button
+2. Enter event details:
+   - Title and description
+   - Choose current time or specify custom date/time
+   - Add optional tags for categorisation
+3. Save the event
 
-#### Managing Events
-- **View**: Events appear chronologically on the timeline with live timers
-- **Search**: Use the search bar to find events by title or description
-- **Filter**: Use tag filters to display specific event categories
-- **Delete**: Click the delete button on any event (requires confirmation)
+### Managing Your Timeline
 
-#### Personalisation
-- **Display name**: Set a custom display name separate from username
-- **Theme**: Choose between light, dark, or system preference themes
-- **Time format**: Select 24-hour or 12-hour (AM/PM) display
-- **Date format**: Choose from multiple date representation formats
-- **Time separators**: Configure visual separators between timeline periods
+- Use the search bar to find specific events
+- Click tag filters to view events by category
+- Export your data regularly as backup
+- Access settings to customise your experience
 
-#### Data Management
-- **Export**: Download all timeline data as unencrypted JSON
-- **Import**: Upload JSON files to add events to existing timeline
-- **Backup**: Regular exports recommended for data preservation
+### Administrative Tasks
 
-### For Administrators
+Administrators can:
+- Create new user accounts (passwords auto-generated)
+- Delete user accounts (requires confirmation)
+- Change their own password
+- View existing users
 
-#### User Management
-- **Create users**: Generate accounts with automatic password creation
-- **Delete users**: Multi-step verification process for account removal
-- **Monitor accounts**: View user creation dates and account status
+Note: Administrators cannot access user data due to client-side encryption.
 
-#### Security Management
-- **Password changes**: Administrative password updates
-- **Session management**: User sessions automatically expire on server restart
-- **Data oversight**: All user data remains encrypted and inaccessible to administrators
+## Technical Information
 
-## Architecture
+### Stack
+- Backend: Rust (Axum framework)
+- Database: PostgreSQL
+- Frontend: HTML, CSS, JavaScript
+- Deployment: Docker
 
-### Technology Stack
-- **Backend**: Rust with Axum web framework
-- **Database**: PostgreSQL 17
-- **Frontend**: Vanilla HTML5, CSS3, and JavaScript (ES6+)
-- **Encryption**: AES-GCM with PBKDF2 key derivation using Web Crypto API
-- **Containerisation**: Docker and Docker Compose
-- **Authentication**: HTTP cookies with server-side session storage
+### Architecture
+Timeline uses a zero-knowledge architecture where all user data is encrypted in the browser before being sent to the server. Encryption keys are derived from user passwords and never leave the client. This ensures that user data remains private and inaccessible to server administrators.
 
-### Security Implementation
-- **Client-side encryption**: All sensitive data encrypted before leaving the browser
-- **Zero-knowledge architecture**: Server cannot access user data in plain text
-- **Secure key derivation**: User passwords derive encryption keys via PBKDF2
-- **Session isolation**: Each user session is independent and secure
-- **CSRF protection**: Cookie-based authentication prevents cross-site attacks
-
-### Database Design
-- **User management**: Secure storage of user credentials and metadata
-- **Encrypted storage**: All user data stored in encrypted format
-- **Tag management**: Automatic tag lifecycle management
-- **Event storage**: Chronological event data with associated metadata
-
-## Configuration
-
-### Environment Variables
-
-#### Database Configuration
-- `DATABASE_URL`: PostgreSQL connection string (default: `postgresql://timeline_user:timeline_password@database:5432/timeline`)
-
-#### Logging
-- `RUST_LOG`: Logging level configuration (default: `info`)
-  - Options: `error`, `warn`, `info`, `debug`, `trace`
-
-#### Network Configuration
-- `DOMAIN`: Comma-separated list of allowed domains (default: `localhost`)
-  - Domains should be specified without ports
-  - Each domain is accessible via both HTTP (8080) and HTTPS (8443)
-  - Examples:
-    - `localhost` - Local development
-    - `192.168.1.10,example.com` - Multiple domains
-    - `10.2.0.5` - Internal network access
-
-#### TLS Configuration
-- `REQUIRE_TLS`: Require TLS for all connections (default: `false`)
-  - `true`: Requires TLS encryption (either via reverse proxy or direct)
-  - `false`: Allows both HTTP and HTTPS connections
-  - Checks X-Forwarded-Proto header for reverse proxy setups
-  - Validates direct TLS connections on port 8443
-
-- `USE_SELF_SIGNED_SSL`: Enable self-signed certificate generation (default: `false`)
-  - `true`: Application generates and uses self-signed TLS certificates on port 8443
-  - `false`: Port 8443 is not opened (expects reverse proxy for HTTPS)
-  - Certificates regenerated on each startup
-  - ⚠️ Browsers will show certificate warnings with self-signed certificates
-
-#### Configuration Scenarios
-
-| REQUIRE_TLS | USE_SELF_SIGNED_SSL | Behaviour | Use Case |
-|------------|---------------------|-----------|----------|
-| `false` | `false` | HTTP and HTTPS (via proxy) both allowed | Development, or production with optional HTTPS reverse proxy |
-| `false` | `true` | HTTP (8080) and self-signed HTTPS (8443) available | Testing HTTPS locally without reverse proxy |
-| `true` | `false` | TLS required via reverse proxy, HTTP rejected | Production with reverse proxy (recommended) |
-| `true` | `true` | Auto-redirect HTTP to HTTPS with self-signed cert | Testing HTTPS redirect behaviour |
-
-### Container Configuration
-- Database: PostgreSQL 17 with persistent volume storage
-- Backend: Rust application with automated dependency management
-- Network: Isolated Docker network for service communication
-- Ports:
-  - `8080`: HTTP (always available, may redirect based on configuration)
-  - `8443`: HTTPS (only when `USE_SELF_SIGNED_SSL=true`)
-
-### Production Deployment with Reverse Proxy
-
-For production deployments, it is recommended to use a reverse proxy (nginx, Caddy, Traefik) with valid TLS certificates:
-
-#### docker-compose.yml Configuration
-```yaml
-environment:
-  DOMAIN: example.com
-  REQUIRE_TLS: "true"
-  USE_SELF_SIGNED_SSL: "false"
-```
-
-#### Example nginx Configuration
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name example.com;
-    
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-    
-    location / {
-        proxy_pass http://localhost:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    }
-}
-```
-
-## Development
-
-### Building from Source
-```bash
-cd backend
-cargo build --release
-```
-
-### Database Migrations
-Database schema is automatically initialised on first startup via Docker entrypoint scripts.
-
-### Logs and Debugging
-```bash
-sudo docker compose logs -f backend
-sudo docker compose logs -f database
-```
-
-## Security Considerations
-
-### Data Protection
-- All user data undergoes client-side encryption before transmission
-- Encryption keys are derived from user passwords and never transmitted
-- Server-side data storage maintains no access to plain text user information
-- Session management prevents unauthorised access to user accounts
-
-### Best Practices
-- Regular password updates recommended
-- Secure storage of admin credentials
-- Regular data exports for backup purposes
-- Monitor application logs for security events
-
-## Support and Maintenance
-
-### Backup Procedures
-1. Export user data regularly through the application interface
-2. Database backups can be performed via Docker volume management
-3. Container persistence ensures data survival across restarts
-
-### Updates and Maintenance
-- Application updates require container rebuild
-- Database migrations are handled automatically
-- User sessions reset on application restart for security
-
-### Troubleshooting
-- Check container logs for error messages
-- Verify Docker network connectivity
-- Ensure proper file permissions for admin credentials
-- Confirm database connectivity and schema initialisation
+### Ports
+- HTTP: 8080
+- HTTPS: 8443 (when configured)
 
 ## Licence
 
-This project is licensed under the terms specified in the LICENCE file.
-
-## Technical Requirements
-
-### Minimum System Requirements
-- 1GB RAM
-- 2GB available disk space
-- Docker 20.10 or later
-- Docker Compose 2.0 or later
-
-### Supported Browsers
-- Chrome 90+
-- Firefox 88+
-- Safari 14+
-- Edge 90+
-
-### Network Requirements
-- Port 8080 available for application access
-- Outbound internet access for Docker image downloads (initial setup only)
+Refer to the LICENCE file for terms and conditions.
