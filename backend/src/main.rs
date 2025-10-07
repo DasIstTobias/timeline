@@ -382,9 +382,11 @@ async fn reset_login_rate_limit(
 }
 
 async fn serve_index(headers: HeaderMap, State(state): State<AppState>) -> Response {
-    // TODO: Re-enable domain checking once HTTP/2 header handling is fixed
-    // For now, just check TLS requirements
+    // Check domain and TLS requirements
     let config = state.tls_config.read().await;
+    if let Err(status) = tls::check_domain_allowed(&headers, &config.domains) {
+        return (status, "Domain not allowed").into_response();
+    }
     if let Err(status) = tls::check_tls_requirement(&headers, config.require_tls, state.is_https_port) {
         return (status, "TLS required").into_response();
     }
@@ -446,8 +448,9 @@ async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
-    // Check TLS requirements (domain checking disabled for now)
+    // Check domain and TLS requirements
     let config = state.tls_config.read().await;
+    tls::check_domain_allowed(&headers, &config.domains)?;
     tls::check_tls_requirement(&headers, config.require_tls, state.is_https_port)?;
     drop(config);
     
@@ -1253,8 +1256,9 @@ async fn verify_2fa_login(
     State(state): State<AppState>,
     Json(req): Json<Verify2FALoginRequest>,
 ) -> Result<(HeaderMap, Json<LoginResponse>), StatusCode> {
-    // Check TLS requirements (domain checking disabled for now)
+    // Check domain and TLS requirements
     let config = state.tls_config.read().await;
+    tls::check_domain_allowed(&headers, &config.domains)?;
     tls::check_tls_requirement(&headers, config.require_tls, state.is_https_port)?;
     drop(config);
     
