@@ -156,7 +156,16 @@ pub fn check_domain_allowed(headers: &HeaderMap, allowed_domains: &[String]) -> 
     }
     
     // Extract hostname without port
-    let hostname = host_header.split(':').next().unwrap_or(host_header);
+    // Handle IPv6 addresses in brackets like [::1]:8080
+    let hostname = if host_header.starts_with('[') {
+        // IPv6 address in brackets - extract content between brackets
+        host_header.split(']').next()
+            .and_then(|s| s.strip_prefix('['))
+            .unwrap_or(host_header)
+    } else {
+        // Regular hostname or IPv4 - split by : and take first part
+        host_header.split(':').next().unwrap_or(host_header)
+    };
     
     // Check if hostname matches any allowed domain
     let is_allowed = allowed_domains.iter().any(|domain| {
@@ -173,6 +182,124 @@ pub fn check_domain_allowed(headers: &HeaderMap, allowed_domains: &[String]) -> 
     }
     
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn test_check_domain_allowed_with_localhost() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("localhost:8080"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "localhost should be allowed");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_with_localhost_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8080"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "127.0.0.1 should be allowed when localhost is configured");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_with_ipv6_localhost() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("[::1]:8080"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "::1 should be allowed when localhost is configured");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_with_custom_domain() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("example.com:8080"));
+        
+        let allowed_domains = vec!["example.com".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "example.com should be allowed");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_with_ip_address() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("192.168.1.10:8080"));
+        
+        let allowed_domains = vec!["192.168.1.10".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "IP address should be allowed when explicitly configured");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_blocks_unknown_domain() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("evil.com:8080"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_err(), "evil.com should be blocked");
+        assert_eq!(result.unwrap_err(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_check_domain_allowed_blocks_unknown_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("192.168.1.100:8080"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_err(), "Unknown IP should be blocked");
+        assert_eq!(result.unwrap_err(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_check_domain_allowed_blocks_missing_host_header() {
+        let headers = HeaderMap::new();
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_err(), "Missing Host header should be blocked");
+        assert_eq!(result.unwrap_err(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_check_domain_allowed_with_multiple_domains() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("example.com:8080"));
+        
+        let allowed_domains = vec!["localhost".to_string(), "example.com".to_string(), "test.com".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "example.com should be allowed in multi-domain list");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_without_port() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("localhost"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "localhost without port should be allowed");
+    }
 }
 
 /// Start HTTP server on port 8080
