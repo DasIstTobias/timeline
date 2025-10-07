@@ -1,32 +1,31 @@
 # <img src="backend/static/favicon.ico" alt="Timeline Logo" width="32" height="32" style="vertical-align: middle;"> Timeline
 
-Timeline is a secure personal timeline application for documenting and managing life events with client-side encryption.
+This is a secure personal timeline application for documenting and managing life events with client-side zero-knowledge encryption.
 
 ## Features
 
 ### Security
-- Client-side zero-knowledge encryption
+- Client-side zero-knowledge encryption with AES-GCM-256
 - All data encrypted in the browser before transmission
-- Passwords hashed with bcrypt
+- Salted passwords hashed with bcrypt
 - Session-based authentication
 - Optional two-factor authentication (2FA)
 
 ### Event Management
 - Create events with title, description, and timestamp
-- Live timers showing elapsed time since each event
+- Live timers show how much time passed since each event
 - Custom or current timestamps for events
-- Delete individual events
-- Colour-coded tags for organisation and filtering
+- USe labels for organisation and filtering
 
 ### Timeline Interface
 - Chronological vertical timeline display
 - Real-time search across event content
-- Filter events by tags
 - Time separators (daily, weekly, monthly, yearly)
 - Responsive design for all devices
 
 ### Personalisation
-- Display name and profile picture
+- Display custom name and profile picture
+- Set a display-name which is zero-knowledge encrypted next to your login-name
 - Theme selection (light, dark, system preference)
 - Customisable accent colour
 - Time format (12-hour or 24-hour)
@@ -34,15 +33,18 @@ Timeline is a secure personal timeline application for documenting and managing 
 
 ### Data Management
 - Export timeline data as JSON
-- Import events from JSON files
 - Export filtered events as PDF
+- Import events from JSON files
+
+### Notes
 - Personal notes feature with autosave
+- Write down stuff that does not fit in a timeline
+- All notes are zero-knowledge encrypted
 
 ### Administration
 - Admin dashboard for user management
 - Create user accounts with secure password generation
-- Multi-step user deletion process
-- Admin password management
+- Easy to use
 
 ## Getting Started
 
@@ -58,17 +60,21 @@ git clone https://github.com/DasIstTobias/timeline.git
 cd timeline
 ```
 
-2. Start the application:
+2. Use the settings (DOMAIN, REQUIRE_TLS, USE_SELF_SIGNED_SSL) in the "docker-compose.yml" to configure the application.
+
+3. Start the application:
 ```bash
-docker compose up -d
+docker compose up --build -d
 ```
 
-3. Retrieve admin credentials:
+4. Retrieve admin credentials:
 ```bash
+docker exec -it <container name which is likely "timeline-backend-1"> bash
 cat admin_credentials.txt
+exit
 ```
 
-4. Access the application at `http://localhost:8080`
+5. Access the application at `http://localhost:8080` or `https://localhost:8443` and login with username "admin" and the password from step 4.
 
 ### Initial Configuration
 
@@ -76,24 +82,6 @@ cat admin_credentials.txt
 2. Create user accounts through the admin dashboard
 3. Users should change their password after first login
 4. Configure personal settings (theme, formats, display name)
-
-## Usage
-
-### Creating Events
-
-1. Click the "Add Event" button
-2. Enter event details:
-   - Title and description
-   - Choose current time or specify custom date/time
-   - Add optional tags for categorisation
-3. Save the event
-
-### Managing Your Timeline
-
-- Use the search bar to find specific events
-- Click tag filters to view events by category
-- Export your data regularly as backup
-- Access settings to customise your experience
 
 ### Administrative Tasks
 
@@ -103,7 +91,7 @@ Administrators can:
 - Change their own password
 - View existing users
 
-Note: Administrators cannot access user data due to client-side encryption.
+Note: Administrators cannot access user data due to zero-knowledge encryption.
 
 ## Technical Information
 
@@ -122,4 +110,5 @@ Timeline uses a zero-knowledge architecture where all user data is encrypted in 
 
 ## Licence
 
-Refer to the LICENCE file for terms and conditions.
+This software is licensed under the GNU General Public Licence Version 3.
+Refer to the LICENCE file for more information.
