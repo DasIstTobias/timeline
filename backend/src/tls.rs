@@ -2,11 +2,11 @@ use axum::{
     http::{HeaderMap, StatusCode, HeaderValue, Method, header},
     Router,
 };
-use axum_server::tls_rustls::RustlsConfig;
 use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
+use tower::ServiceExt;
 
 #[derive(Clone)]
 pub struct TlsConfig {
@@ -140,39 +140,204 @@ pub fn check_tls_requirement(
 
 /// Check if domain is allowed based on Host header
 pub fn check_domain_allowed(headers: &HeaderMap, allowed_domains: &[String]) -> Result<(), StatusCode> {
-    // Try to get host from Host header first
+    // Try multiple headers to find the host information
+    // HTTP/1.1 uses "host", HTTP/2 uses ":authority" pseudo-header
     let host_header = headers.get(header::HOST)
         .and_then(|h| h.to_str().ok())
+        .or_else(|| {
+            // Try :authority for HTTP/2
+            headers.iter()
+                .find(|(name, _)| name.as_str() == ":authority")
+                .and_then(|(_, value)| value.to_str().ok())
+        })
         .unwrap_or("");
     
     // Debug: log all headers if Host is missing
     if host_header.is_empty() {
-        log::debug!("Host header missing. Available headers:");
+        log::warn!("Host/:authority header missing. Available headers:");
         for (name, value) in headers.iter() {
-            log::debug!("  {}: {:?}", name, value);
+            log::warn!("  {}: {:?}", name, value);
         }
-        log::warn!("No Host header provided, blocking request");
+        log::warn!("No Host or :authority header provided, blocking request");
         return Err(StatusCode::FORBIDDEN);
     }
     
-    // Extract hostname without port
-    let hostname = host_header.split(':').next().unwrap_or(host_header);
+    log::info!("Domain check: Host header = '{}', Allowed domains = {:?}", host_header, allowed_domains);
     
-    // Check if hostname matches any allowed domain
+    // Extract hostname without port
+    // Handle IPv6 addresses in brackets like [::1]:8080
+    let hostname = if host_header.starts_with('[') {
+        // IPv6 address in brackets - extract content between brackets
+        host_header.split(']').next()
+            .and_then(|s| s.strip_prefix('['))
+            .unwrap_or(host_header)
+    } else {
+        // Regular hostname or IPv4 - split by : and take first part
+        host_header.split(':').next().unwrap_or(host_header)
+    };
+    
+    log::info!("Extracted hostname: '{}'", hostname);
+    
+    // Check if hostname matches any allowed domain (case-insensitive for domain names)
+    let hostname_lower = hostname.to_lowercase();
     let is_allowed = allowed_domains.iter().any(|domain| {
-        if domain == "localhost" {
-            hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
+        let domain_lower = domain.to_lowercase();
+        let matches = if domain_lower == "localhost" {
+            hostname_lower == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
         } else {
-            hostname == domain
-        }
+            hostname_lower == domain_lower
+        };
+        log::info!("Checking '{}' against '{}': {}", hostname, domain, matches);
+        matches
     });
     
     if !is_allowed {
-        log::warn!("Domain '{}' not in allowed list, blocking request", hostname);
+        log::warn!("Domain '{}' not in allowed list {:?}, blocking request", hostname, allowed_domains);
         return Err(StatusCode::FORBIDDEN);
     }
     
+    log::info!("Domain '{}' allowed", hostname);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn test_check_domain_allowed_with_localhost() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("localhost:8080"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "localhost should be allowed");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_with_localhost_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8080"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "127.0.0.1 should be allowed when localhost is configured");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_with_ipv6_localhost() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("[::1]:8080"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "::1 should be allowed when localhost is configured");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_with_custom_domain() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("example.com:8080"));
+        
+        let allowed_domains = vec!["example.com".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "example.com should be allowed");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_with_ip_address() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("192.168.1.10:8080"));
+        
+        let allowed_domains = vec!["192.168.1.10".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "IP address should be allowed when explicitly configured");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_blocks_unknown_domain() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("evil.com:8080"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_err(), "evil.com should be blocked");
+        assert_eq!(result.unwrap_err(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_check_domain_allowed_blocks_unknown_ip() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("192.168.1.100:8080"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_err(), "Unknown IP should be blocked");
+        assert_eq!(result.unwrap_err(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_check_domain_allowed_blocks_missing_host_header() {
+        let headers = HeaderMap::new();
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_err(), "Missing Host header should be blocked");
+        assert_eq!(result.unwrap_err(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_check_domain_allowed_with_multiple_domains() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("example.com:8080"));
+        
+        let allowed_domains = vec!["localhost".to_string(), "example.com".to_string(), "test.com".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "example.com should be allowed in multi-domain list");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_without_port() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("localhost"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "localhost without port should be allowed");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_case_insensitive() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("EXAMPLE.COM:8443"));
+        
+        let allowed_domains = vec!["example.com".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "Domain matching should be case-insensitive");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_localhost_uppercase() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("LOCALHOST:8443"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "Localhost should be case-insensitive");
+    }
 }
 
 /// Start HTTP server on port 8080
@@ -212,27 +377,72 @@ pub async fn start_http_server(
     Ok(())
 }
 
-/// Start HTTPS server on port 8443 with self-signed certificate
+/// Start HTTPS server on port 8443 with self-signed certificate  
 pub async fn start_https_server(
     app: Router,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use rustls::ServerConfig;
+    use rustls_pemfile::{certs, private_key};
+    use std::io::BufReader;
+    
     let (cert_pem, key_pem) = generate_self_signed_cert().await?;
     
-    // Write to temporary files for RustlsConfig
-    let cert_path = "/tmp/timeline_cert.pem";
-    let key_path = "/tmp/timeline_key.pem";
+    // Parse certificates and key
+    let certs: Vec<_> = certs(&mut BufReader::new(cert_pem.as_slice()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let key = private_key(&mut BufReader::new(key_pem.as_slice()))?
+        .ok_or("No private key found")?;
     
-    tokio::fs::write(cert_path, &cert_pem).await?;
-    tokio::fs::write(key_path, &key_pem).await?;
+    // Create rustls config - configure to ensure headers are properly handled
+    let tls_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
     
-    let tls_config = RustlsConfig::from_pem_file(cert_path, key_path).await?;
+    let tls_config = Arc::new(tls_config);
     
     let addr = SocketAddr::from(([0, 0, 0, 0], 8443));
     log::info!("HTTPS server starting on {}", addr);
     
-    axum_server::bind_rustls(addr, tls_config)
-        .serve(app.into_make_service())
-        .await?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let tls_acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
     
-    Ok(())
+    // Accept connections in a loop
+    loop {
+        let (stream, remote_addr) = match listener.accept().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                log::error!("Failed to accept connection: {}", e);
+                continue;
+            }
+        };
+        
+        let tls_acceptor = tls_acceptor.clone();
+        let app = app.clone();
+        
+        tokio::spawn(async move {
+            // Perform TLS handshake
+            let tls_stream = match tls_acceptor.accept(stream).await {
+                Ok(s) => s,
+                Err(e) => {
+                    log::debug!("TLS handshake failed from {}: {}", remote_addr, e);
+                    return;
+                }
+            };
+            
+            // Serve the connection using hyper
+            let svc = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                let app = app.clone();
+                async move {
+                    Ok::<_, std::convert::Infallible>(app.clone().oneshot(req).await.unwrap())
+                }
+            });
+            
+            if let Err(e) = hyper::server::conn::http1::Builder::new()
+                .serve_connection(hyper_util::rt::TokioIo::new(tls_stream), svc)
+                .await
+            {
+                log::debug!("Error serving connection from {}: {}", remote_addr, e);
+            }
+        });
+    }
 }
