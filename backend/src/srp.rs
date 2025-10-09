@@ -66,8 +66,8 @@ pub fn srp_begin_authentication(
 /// Verify SRP session and compute server proof M2
 /// Returns M2 if verification succeeds
 pub fn srp_verify_session(
-    username: &str,
-    salt: &[u8],
+    _username: &str,
+    _salt: &[u8],
     verifier: &[u8],
     a_pub: &[u8],
     b_priv: &BigUint,
@@ -79,6 +79,12 @@ pub fn srp_verify_session(
     let a_pub_big = BigUint::from_bytes_be(a_pub);
     let v = BigUint::from_bytes_be(verifier);
     
+    // Security check: A must not be 0 or N (prevent timing attacks)
+    let n = BigUint::from_bytes_be(&hex::decode("AC6BDB41324A9A9BF166DE5E1389582FAF72B6651987EE07FC3192943DB56050A37329CBB4A099ED8193E0757767A13DD52312AB4B03310DCD7F48A9DA04FD50E8083969EDB767B0CF6095179A163AB3661A05FBD5FAAAE82918A9962F0B93B855F97993EC975EEAA80D740ADBF4FF747359D041D5C33EA71D281E446B14773BCA97B43A23FB801676BD207A436C6481F1D2B9078717461A5B9D32E688F87748544523B524B0D57D5EA77A2775D2ECFA032CFBDBF52FB3786160279004E57AE6AF874E7303CE53299CCC041C7BC308D82A5698F3A8D0C38271AE35F8E9DBFBB694B5C803D89F7AE435DE236D525F54759B65E372FCD68EF20FA7111F9E4AFF73").unwrap());
+    if a_pub_big == BigUint::from(0u32) || a_pub_big >= n {
+        return Err("Invalid A value (security check failed)".to_string());
+    }
+    
     // Compute u
     let b_pub = {
         let k = compute_k::<Sha256>(&G_2048);
@@ -86,13 +92,18 @@ pub fn srp_verify_session(
     };
     let u = srp::utils::compute_u::<Sha256>(&a_pub, &b_pub.to_bytes_be());
     
+    // Security check: u must not be 0
+    if u == BigUint::from(0u32) {
+        return Err("Invalid u value (security check failed)".to_string());
+    }
+    
     // Compute premaster secret (server side)
     let premaster = server.compute_premaster_secret(&a_pub_big, &v, &u, b_priv);
     
     // Compute session key
     let session_key = sha2::Sha256::digest(&premaster.to_bytes_be());
     
-    // Verify M1
+    // Verify M1 using constant-time comparison
     let m1_expected = {
         use sha2::Digest;
         let mut hasher = sha2::Sha256::new();
@@ -102,7 +113,17 @@ pub fn srp_verify_session(
         hasher.finalize()
     };
     
-    if m1_client != m1_expected.as_slice() {
+    // Constant-time comparison to prevent timing attacks
+    if m1_client.len() != m1_expected.len() {
+        return Err("M1 verification failed".to_string());
+    }
+    
+    let mut result = 0u8;
+    for (a, b) in m1_client.iter().zip(m1_expected.iter()) {
+        result |= a ^ b;
+    }
+    
+    if result != 0 {
         return Err("M1 verification failed".to_string());
     }
     

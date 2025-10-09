@@ -21,7 +21,7 @@ mod tls;
 mod twofa;
 
 use auth::{create_session, verify_session, SessionData};
-use crypto::{generate_random_password, derive_password_hash};
+use crypto::generate_random_password;
 use tls::TlsConfig;
 use twofa::TwoFABruteForceProtection;
 
@@ -627,9 +627,22 @@ async fn login_verify(
         })));
     }
     
-    // Decode A and M1
+    // Decode A and M1 with input validation
     let a_pub = hex::decode(&req.a_pub).map_err(|_| StatusCode::BAD_REQUEST)?;
     let m1 = hex::decode(&req.m1).map_err(|_| StatusCode::BAD_REQUEST)?;
+    
+    // Validate lengths (A should be ~256 bytes for 2048-bit group, M1 should be 32 bytes for SHA-256)
+    if a_pub.is_empty() || a_pub.len() > 512 || m1.len() != 32 {
+        state.pending_srp.write().await.remove(&req.session_id);
+        return Ok((HeaderMap::new(), Json(LoginVerifyResponse {
+            success: false,
+            m2: None,
+            user_type: None,
+            requires_2fa: None,
+            temp_2fa_session_id: None,
+            message: Some("Invalid credentials".to_string()),
+        })));
+    }
     
     // Verify SRP
     let m2 = match srp::srp_verify_session(
