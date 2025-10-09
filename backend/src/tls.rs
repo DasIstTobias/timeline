@@ -172,12 +172,14 @@ pub fn check_domain_allowed(headers: &HeaderMap, allowed_domains: &[String]) -> 
     
     log::info!("Extracted hostname: '{}'", hostname);
     
-    // Check if hostname matches any allowed domain
+    // Check if hostname matches any allowed domain (case-insensitive for domain names)
+    let hostname_lower = hostname.to_lowercase();
     let is_allowed = allowed_domains.iter().any(|domain| {
-        let matches = if domain == "localhost" {
-            hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
+        let domain_lower = domain.to_lowercase();
+        let matches = if domain_lower == "localhost" {
+            hostname_lower == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
         } else {
-            hostname == domain
+            hostname_lower == domain_lower
         };
         log::info!("Checking '{}' against '{}': {}", hostname, domain, matches);
         matches
@@ -307,6 +309,28 @@ mod tests {
         let result = check_domain_allowed(&headers, &allowed_domains);
         
         assert!(result.is_ok(), "localhost without port should be allowed");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_case_insensitive() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("EXAMPLE.COM:8443"));
+        
+        let allowed_domains = vec!["example.com".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "Domain matching should be case-insensitive");
+    }
+
+    #[test]
+    fn test_check_domain_allowed_localhost_uppercase() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("LOCALHOST:8443"));
+        
+        let allowed_domains = vec!["localhost".to_string()];
+        let result = check_domain_allowed(&headers, &allowed_domains);
+        
+        assert!(result.is_ok(), "Localhost should be case-insensitive");
     }
 }
 
