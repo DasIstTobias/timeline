@@ -129,8 +129,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     
     // Write admin credentials to file
-    tokio::fs::write("admin_credentials.txt", format!("Username: admin\nPassword: {}", admin_password)).await?;
-    log::info!("Admin credentials written to admin_credentials.txt");
+    // Try to write to host directory if mounted, otherwise write to current directory
+    let credentials_content = format!("Username: admin\nPassword: {}", admin_password);
+    let host_path = "host/admin_credentials.txt";
+    let local_path = "admin_credentials.txt";
+    
+    if tokio::fs::metadata("host").await.is_ok() {
+        tokio::fs::write(host_path, &credentials_content).await?;
+        log::info!("Admin credentials written to {}", host_path);
+    } else {
+        tokio::fs::write(local_path, &credentials_content).await?;
+        log::info!("Admin credentials written to {}", local_path);
+    }
     
     // Read TLS configuration from environment
     let tls_config = Arc::new(RwLock::new(TlsConfig::from_env()));

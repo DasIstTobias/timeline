@@ -21,6 +21,8 @@ services:
     ports:
       - "8080:8080"
       - "8443:8443"
+    volumes:
+      - .:/app/host:rw
     environment:
       DATABASE_URL: postgresql://timeline_user:timeline_password@database:5432/timeline
       RUST_LOG: info
