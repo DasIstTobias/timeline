@@ -69,9 +69,7 @@ docker compose up --build -d
 
 4. Retrieve admin credentials:
 ```bash
-docker exec -it <container name which is likely "timeline-backend-1"> bash
 cat admin_credentials.txt
-exit
 ```
 
 5. Access the application at `http://localhost:8080` or `https://localhost:8443` and login with username "admin" and the password from step 4.
