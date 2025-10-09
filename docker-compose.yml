@@ -36,13 +36,13 @@ services:
       # When "true": Requires TLS for all connections (either via reverse proxy or direct)
       # When "false": Allows both HTTP and HTTPS connections
       # Applies to both port 8080 (checks X-Forwarded-Proto header) and 8443 (direct TLS)
-      REQUIRE_TLS: "false"
+      REQUIRE_TLS: "true"
       # Self-Signed SSL Certificate
       # When "true": Application generates and uses self-signed TLS certificates on port 8443
       # When "false": Port 8443 is not opened (expects reverse proxy for HTTPS)
       # Note: When both REQUIRE_TLS and USE_SELF_SIGNED_SSL are "true",
       #       HTTP requests on port 8080 will auto-redirect to HTTPS on port 8443
-      USE_SELF_SIGNED_SSL: "false"
+      USE_SELF_SIGNED_SSL: "true"
     depends_on:
       - database
     networks:

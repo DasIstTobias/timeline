@@ -104,6 +104,23 @@ struct PendingSrpAuth {
     created_at: std::time::SystemTime,
 }
 
+impl Drop for PendingSrpAuth {
+    fn drop(&mut self) {
+        // Zero out sensitive ephemeral data before dropping
+        // b_priv is BigUint, can't directly zero but it will be dropped
+        // Zero out byte arrays
+        for byte in self.b_pub.iter_mut() {
+            *byte = 0;
+        }
+        for byte in self.verifier.iter_mut() {
+            *byte = 0;
+        }
+        for byte in self.salt.iter_mut() {
+            *byte = 0;
+        }
+    }
+}
+
 // Pending 2FA secret during setup
 #[derive(Clone)]
 struct PendingSecret {

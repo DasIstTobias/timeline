@@ -114,6 +114,11 @@ class SRPClient {
         const k = BigInt('0x' + this.k_hex);
         const B = BigInt('0x' + serverBPub);
         
+        // Security check: B mod N must not be 0
+        if (B % N === 0n) {
+            throw new Error('Invalid server public value (B mod N = 0)');
+        }
+        
         // Compute identity hash
         const identityHash = await this.computeIdentityHash(username, password);
         
@@ -121,12 +126,23 @@ class SRPClient {
         const xBytes = await this.computeX(serverSalt, identityHash);
         const x = BigInt('0x' + this.bytesToHex(xBytes));
         
-        // Generate random a (256 bits)
+        // Generate cryptographically secure random a (256 bits)
         const aBytes = this.randomBytes(32);
         const a = BigInt('0x' + this.bytesToHex(aBytes));
         
+        // Security check: A must not be 0 or >= N
+        if (a === 0n) {
+            throw new Error('Invalid random value generated (a = 0)');
+        }
+        
         // Compute A = g^a mod N
         const A = this.modPow(g, a, N);
+        
+        // Security check: A must not be 0
+        if (A === 0n) {
+            throw new Error('Invalid A value (A = 0)');
+        }
+        
         const A_hex = this.bigIntToHex(A);
         
         // Compute u = H(A || B)
@@ -137,6 +153,11 @@ class SRPClient {
         u_input.set(B_bytes, A_bytes.length);
         const u_hash = await this.sha256(u_input);
         const u = BigInt('0x' + this.bytesToHex(u_hash));
+        
+        // Security check: u must not be 0
+        if (u === 0n) {
+            throw new Error('Invalid u value (u = 0)');
+        }
         
         // Compute client premaster secret: S = (B - kg^x)^(a + ux) mod N
         const gx = this.modPow(g, x, N);
