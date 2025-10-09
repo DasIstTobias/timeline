@@ -2,11 +2,11 @@ use axum::{
     http::{HeaderMap, StatusCode, HeaderValue, Method, header},
     Router,
 };
-use axum_server::tls_rustls::RustlsConfig;
 use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
+use tower::ServiceExt;
 
 #[derive(Clone)]
 pub struct TlsConfig {
@@ -377,27 +377,72 @@ pub async fn start_http_server(
     Ok(())
 }
 
-/// Start HTTPS server on port 8443 with self-signed certificate
+/// Start HTTPS server on port 8443 with self-signed certificate  
 pub async fn start_https_server(
     app: Router,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use rustls::ServerConfig;
+    use rustls_pemfile::{certs, private_key};
+    use std::io::BufReader;
+    
     let (cert_pem, key_pem) = generate_self_signed_cert().await?;
     
-    // Write to temporary files for RustlsConfig
-    let cert_path = "/tmp/timeline_cert.pem";
-    let key_path = "/tmp/timeline_key.pem";
+    // Parse certificates and key
+    let certs: Vec<_> = certs(&mut BufReader::new(cert_pem.as_slice()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let key = private_key(&mut BufReader::new(key_pem.as_slice()))?
+        .ok_or("No private key found")?;
     
-    tokio::fs::write(cert_path, &cert_pem).await?;
-    tokio::fs::write(key_path, &key_pem).await?;
+    // Create rustls config - configure to ensure headers are properly handled
+    let tls_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
     
-    let tls_config = RustlsConfig::from_pem_file(cert_path, key_path).await?;
+    let tls_config = Arc::new(tls_config);
     
     let addr = SocketAddr::from(([0, 0, 0, 0], 8443));
     log::info!("HTTPS server starting on {}", addr);
     
-    axum_server::bind_rustls(addr, tls_config)
-        .serve(app.into_make_service())
-        .await?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let tls_acceptor = tokio_rustls::TlsAcceptor::from(tls_config);
     
-    Ok(())
+    // Accept connections in a loop
+    loop {
+        let (stream, remote_addr) = match listener.accept().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                log::error!("Failed to accept connection: {}", e);
+                continue;
+            }
+        };
+        
+        let tls_acceptor = tls_acceptor.clone();
+        let app = app.clone();
+        
+        tokio::spawn(async move {
+            // Perform TLS handshake
+            let tls_stream = match tls_acceptor.accept(stream).await {
+                Ok(s) => s,
+                Err(e) => {
+                    log::debug!("TLS handshake failed from {}: {}", remote_addr, e);
+                    return;
+                }
+            };
+            
+            // Serve the connection using hyper
+            let svc = hyper::service::service_fn(move |req: hyper::Request<hyper::body::Incoming>| {
+                let app = app.clone();
+                async move {
+                    Ok::<_, std::convert::Infallible>(app.clone().oneshot(req).await.unwrap())
+                }
+            });
+            
+            if let Err(e) = hyper::server::conn::http1::Builder::new()
+                .serve_connection(hyper_util::rt::TokioIo::new(tls_stream), svc)
+                .await
+            {
+                log::debug!("Error serving connection from {}: {}", remote_addr, e);
+            }
+        });
+    }
 }
