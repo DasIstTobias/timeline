@@ -97,10 +97,10 @@ impl Drop for Pending2FAAuth {
 #[derive(Clone)]
 struct PendingSrpAuth {
     username: String,
-    b_priv: Vec<u8>,    // Server's private ephemeral
-    b_pub: Vec<u8>,     // Server's public ephemeral
-    verifier: Vec<u8>,  // User's verifier
-    salt: Vec<u8>,      // User's salt
+    b_priv: num_bigint::BigUint,  // Server's private ephemeral
+    b_pub: Vec<u8>,               // Server's public ephemeral (bytes)
+    verifier: Vec<u8>,            // User's verifier
+    salt: Vec<u8>,                // User's salt
     created_at: std::time::SystemTime,
 }
 
@@ -787,13 +787,15 @@ async fn register(
     
     // Generate random password
     let password = generate_random_password();
-    let password_hash = hash_password(&password).await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Generate SRP credentials
+    let (salt, verifier) = srp::generate_srp_credentials(&req.username, &password);
     
     // Create user
-    let result = sqlx::query("INSERT INTO users (username, password_hash) VALUES ($1, $2)")
+    let result = sqlx::query("INSERT INTO users (username, srp_salt, srp_verifier) VALUES ($1, $2, $3)")
         .bind(&req.username)
-        .bind(&password_hash)
+        .bind(&salt)
+        .bind(&verifier)
         .execute(&state.db)
         .await;
     
@@ -813,8 +815,10 @@ async fn register(
 
 #[derive(Deserialize)]
 struct ChangePasswordRequest {
-    old_password: String,
-    new_password: String,
+    new_salt: String,
+    new_verifier: String,
+    old_password_hash: String, // For 2FA re-encryption
+    new_password_hash: String, // For 2FA re-encryption
 }
 
 async fn change_password(
@@ -825,42 +829,33 @@ async fn change_password(
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
-    // Get current password hash and 2FA status
-    let row = sqlx::query("SELECT password_hash, totp_enabled, totp_secret_encrypted FROM users WHERE id = $1")
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Get 2FA status
+    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    let current_hash: String = row.get("password_hash");
     let totp_enabled: bool = row.get("totp_enabled");
     let totp_secret_encrypted: Option<String> = row.get("totp_secret_encrypted");
     
-    // Verify old password
-    if !verify_password(&req.old_password, &current_hash).await.unwrap_or(false) {
-        return Ok(Json(serde_json::json!({
-            "success": false,
-            "message": "Current password is incorrect"
-        })));
-    }
-    
-    // Hash new password
-    let new_hash = hash_password(&req.new_password).await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    // If 2FA is enabled, re-encrypt the TOTP secret with new password
+    // If 2FA is enabled, re-encrypt the TOTP secret with new password hash
     let new_totp_secret_encrypted = if totp_enabled && totp_secret_encrypted.is_some() {
         let old_encrypted = totp_secret_encrypted.unwrap();
         
-        // Decrypt with old password
-        let totp_secret = crypto::decrypt_totp_secret(&old_encrypted, &req.old_password)
+        // Decrypt with old password hash
+        let totp_secret = crypto::decrypt_totp_secret(&old_encrypted, &req.old_password_hash)
             .map_err(|e| {
                 log::error!("Failed to decrypt TOTP secret during password change: {}", e);
                 StatusCode::INTERNAL_SERVER_ERROR
             })?;
         
-        // Re-encrypt with new password
-        let new_encrypted = crypto::encrypt_totp_secret(&totp_secret, &req.new_password, &auth_state.user_id.to_string())
+        // Re-encrypt with new password hash
+        let new_encrypted = crypto::encrypt_totp_secret(&totp_secret, &req.new_password_hash, &auth_state.user_id.to_string())
             .map_err(|e| {
                 log::error!("Failed to re-encrypt TOTP secret during password change: {}", e);
                 StatusCode::INTERNAL_SERVER_ERROR
@@ -871,18 +866,20 @@ async fn change_password(
         None
     };
     
-    // Update password and optionally re-encrypted TOTP secret
+    // Update SRP credentials and optionally re-encrypted TOTP secret
     if let Some(new_encrypted) = new_totp_secret_encrypted {
-        sqlx::query("UPDATE users SET password_hash = $1, totp_secret_encrypted = $2 WHERE id = $3")
-            .bind(&new_hash)
+        sqlx::query("UPDATE users SET srp_salt = $1, srp_verifier = $2, totp_secret_encrypted = $3 WHERE id = $4")
+            .bind(&req.new_salt)
+            .bind(&req.new_verifier)
             .bind(&new_encrypted)
             .bind(auth_state.user_id)
             .execute(&state.db)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     } else {
-        sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
-            .bind(&new_hash)
+        sqlx::query("UPDATE users SET srp_salt = $1, srp_verifier = $2 WHERE id = $3")
+            .bind(&req.new_salt)
+            .bind(&req.new_verifier)
             .bind(auth_state.user_id)
             .execute(&state.db)
             .await
@@ -1575,7 +1572,7 @@ async fn get_2fa_status(
 
 #[derive(Deserialize)]
 struct Setup2FARequest {
-    password: String,
+    // No password needed - user is already authenticated via session
 }
 
 #[derive(Serialize)]
@@ -1589,30 +1586,13 @@ struct Setup2FAResponse {
 async fn setup_2fa(
     headers: HeaderMap,
     State(state): State<AppState>,
-    Json(req): Json<Setup2FARequest>,
+    Json(_req): Json<Setup2FARequest>,
 ) -> Result<Json<Setup2FAResponse>, StatusCode> {
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
     if auth_state.is_admin {
         return Err(StatusCode::FORBIDDEN);
-    }
-    
-    // Verify password first
-    let password_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
-        .bind(auth_state.user_id)
-        .fetch_one(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    let password_valid = verify_password(&req.password, &password_hash).await.unwrap_or(false);
-    if !password_valid {
-        return Ok(Json(Setup2FAResponse {
-            success: false,
-            secret: None,
-            qr_uri: None,
-            message: Some("Invalid password".to_string()),
-        }));
     }
     
     // Check if 2FA is already enabled
@@ -1656,7 +1636,7 @@ async fn setup_2fa(
 #[derive(Deserialize)]
 struct Enable2FARequest {
     totp_code: String,
-    password: String,
+    password_hash: String, // Client-derived password hash for encryption
 }
 
 #[derive(Serialize)]
@@ -1723,21 +1703,6 @@ async fn enable_2fa(
         }));
     }
     
-    // Verify password
-    let password_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
-        .bind(auth_state.user_id)
-        .fetch_one(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
-    let password_valid = verify_password(&req.password, &password_hash).await.unwrap_or(false);
-    if !password_valid {
-        return Ok(Json(Enable2FAResponse {
-            success: false,
-            message: Some("Invalid password".to_string()),
-        }));
-    }
-    
     // Verify TOTP code against SERVER's secret, not client's
     if !twofa::verify_totp_code(&pending.secret, &req.totp_code) {
         return Ok(Json(Enable2FAResponse {
@@ -1746,9 +1711,9 @@ async fn enable_2fa(
         }));
     }
     
-    // Encrypt TOTP secret with user's password before storing
+    // Encrypt TOTP secret with user's password hash before storing
     let user_id_str = auth_state.user_id.to_string();
-    let encrypted_secret = crypto::encrypt_totp_secret(&pending.secret, &req.password, &user_id_str)
+    let encrypted_secret = crypto::encrypt_totp_secret(&pending.secret, &req.password_hash, &user_id_str)
         .map_err(|e| {
             log::error!("Failed to encrypt TOTP secret: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
@@ -1774,7 +1739,7 @@ async fn enable_2fa(
 #[derive(Deserialize)]
 struct Disable2FARequest {
     totp_code: String,
-    password: String,
+    password_hash: String, // Client-derived password hash for decryption
 }
 
 #[derive(Serialize)]
@@ -1804,7 +1769,7 @@ async fn disable_2fa(
     }
     
     // Get current 2FA status and encrypted secret
-    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted, password_hash FROM users WHERE id = $1")
+    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
@@ -1812,7 +1777,6 @@ async fn disable_2fa(
     
     let totp_enabled: bool = row.get("totp_enabled");
     let totp_secret_encrypted: Option<String> = row.get("totp_secret_encrypted");
-    let password_hash: String = row.get("password_hash");
     
     if !totp_enabled {
         return Ok(Json(Disable2FAResponse {
@@ -1823,17 +1787,8 @@ async fn disable_2fa(
     
     let encrypted_secret = totp_secret_encrypted.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    // Verify password
-    let password_valid = verify_password(&req.password, &password_hash).await.unwrap_or(false);
-    if !password_valid {
-        return Ok(Json(Disable2FAResponse {
-            success: false,
-            message: Some("Invalid password".to_string()),
-        }));
-    }
-    
     // Decrypt TOTP secret to verify code
-    let secret = match crypto::decrypt_totp_secret(&encrypted_secret, &req.password) {
+    let secret = match crypto::decrypt_totp_secret(&encrypted_secret, &req.password_hash) {
         Ok(s) => s,
         Err(e) => {
             log::error!("Failed to decrypt TOTP secret: {}", e);

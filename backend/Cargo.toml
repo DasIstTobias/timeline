@@ -19,7 +19,7 @@ aes-gcm = "0.10"
 pbkdf2 = { version = "0.12", features = ["simple"] }
 sha2 = "0.10"
 base64 = "0.22"
-srp = "0.7"
+srp = "0.6"
 num-bigint = "0.4"
 hex = "0.4"
 cookie = "0.18"
