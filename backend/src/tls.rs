@@ -140,19 +140,25 @@ pub fn check_tls_requirement(
 
 /// Check if domain is allowed based on Host header
 pub fn check_domain_allowed(headers: &HeaderMap, allowed_domains: &[String]) -> Result<(), StatusCode> {
-    // Get host from Host header (works for both HTTP/1.1 and HTTP/2)
-    // In HTTP/2, the :authority pseudo-header is automatically converted to Host by axum/hyper
+    // Try multiple headers to find the host information
+    // HTTP/1.1 uses "host", HTTP/2 uses ":authority" pseudo-header
     let host_header = headers.get(header::HOST)
         .and_then(|h| h.to_str().ok())
+        .or_else(|| {
+            // Try :authority for HTTP/2
+            headers.iter()
+                .find(|(name, _)| name.as_str() == ":authority")
+                .and_then(|(_, value)| value.to_str().ok())
+        })
         .unwrap_or("");
     
     // Debug: log all headers if Host is missing
     if host_header.is_empty() {
-        log::warn!("Host header missing. Available headers:");
+        log::warn!("Host/:authority header missing. Available headers:");
         for (name, value) in headers.iter() {
             log::warn!("  {}: {:?}", name, value);
         }
-        log::warn!("No Host header provided, blocking request");
+        log::warn!("No Host or :authority header provided, blocking request");
         return Err(StatusCode::FORBIDDEN);
     }
     
@@ -389,10 +395,8 @@ pub async fn start_https_server(
     let addr = SocketAddr::from(([0, 0, 0, 0], 8443));
     log::info!("HTTPS server starting on {}", addr);
     
-    // Use into_make_service_with_connect_info to preserve connection information
-    // This ensures headers like Host are properly passed through
     axum_server::bind_rustls(addr, tls_config)
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+        .serve(app.into_make_service())
         .await?;
     
     Ok(())
