@@ -101,3 +101,17 @@ pub fn decrypt_totp_secret(encrypted: &str, password: &str) -> Result<String, St
     String::from_utf8(plaintext)
         .map_err(|e| format!("UTF-8 error: {}", e))
 }
+
+/// Derive a consistent password hash for TOTP encryption
+/// This is used client-side and server-side to encrypt/decrypt TOTP secrets
+/// Uses PBKDF2 with a fixed salt to derive a deterministic hash from password
+pub fn derive_password_hash(password: &str) -> String {
+    use pbkdf2::pbkdf2_hmac;
+    use sha2::Sha256;
+    
+    let salt = b"timeline_auth_hash"; // Fixed salt for auth hash derivation
+    let mut hash = vec![0u8; 32];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, 100_000, &mut hash);
+    
+    hex::encode(hash)
+}
