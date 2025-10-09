@@ -389,8 +389,10 @@ pub async fn start_https_server(
     let addr = SocketAddr::from(([0, 0, 0, 0], 8443));
     log::info!("HTTPS server starting on {}", addr);
     
+    // Use into_make_service_with_connect_info to preserve connection information
+    // This ensures headers like Host are properly passed through
     axum_server::bind_rustls(addr, tls_config)
-        .serve(app.into_make_service())
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await?;
     
     Ok(())
