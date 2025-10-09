@@ -140,20 +140,23 @@ pub fn check_tls_requirement(
 
 /// Check if domain is allowed based on Host header
 pub fn check_domain_allowed(headers: &HeaderMap, allowed_domains: &[String]) -> Result<(), StatusCode> {
-    // Try to get host from Host header first
+    // Get host from Host header (works for both HTTP/1.1 and HTTP/2)
+    // In HTTP/2, the :authority pseudo-header is automatically converted to Host by axum/hyper
     let host_header = headers.get(header::HOST)
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
     
     // Debug: log all headers if Host is missing
     if host_header.is_empty() {
-        log::debug!("Host header missing. Available headers:");
+        log::warn!("Host header missing. Available headers:");
         for (name, value) in headers.iter() {
-            log::debug!("  {}: {:?}", name, value);
+            log::warn!("  {}: {:?}", name, value);
         }
         log::warn!("No Host header provided, blocking request");
         return Err(StatusCode::FORBIDDEN);
     }
+    
+    log::info!("Domain check: Host header = '{}', Allowed domains = {:?}", host_header, allowed_domains);
     
     // Extract hostname without port
     // Handle IPv6 addresses in brackets like [::1]:8080
@@ -167,20 +170,25 @@ pub fn check_domain_allowed(headers: &HeaderMap, allowed_domains: &[String]) -> 
         host_header.split(':').next().unwrap_or(host_header)
     };
     
+    log::info!("Extracted hostname: '{}'", hostname);
+    
     // Check if hostname matches any allowed domain
     let is_allowed = allowed_domains.iter().any(|domain| {
-        if domain == "localhost" {
+        let matches = if domain == "localhost" {
             hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1"
         } else {
             hostname == domain
-        }
+        };
+        log::info!("Checking '{}' against '{}': {}", hostname, domain, matches);
+        matches
     });
     
     if !is_allowed {
-        log::warn!("Domain '{}' not in allowed list, blocking request", hostname);
+        log::warn!("Domain '{}' not in allowed list {:?}, blocking request", hostname, allowed_domains);
         return Err(StatusCode::FORBIDDEN);
     }
     
+    log::info!("Domain '{}' allowed", hostname);
     Ok(())
 }
 
