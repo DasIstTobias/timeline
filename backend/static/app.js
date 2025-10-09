@@ -1356,15 +1356,24 @@ class TimelineApp {
                 throw new Error('Failed to clear user data');
             }
             
-            // Step 3: Change password in backend
+            // Step 3: Generate new SRP credentials
+            const newCredentials = await window.srpClient.generateCredentials(this.currentUser.username, newPassword);
+            
+            // Step 4: Derive password hashes for TOTP re-encryption
+            const oldPasswordHash = await window.cryptoUtils.derivePasswordHash(oldPassword);
+            const newPasswordHash = await window.cryptoUtils.derivePasswordHash(newPassword);
+            
+            // Step 5: Change password in backend
             const passwordResponse = await fetch('/api/change-password', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    old_password: oldPassword,
-                    new_password: newPassword
+                    new_salt: newCredentials.salt,
+                    new_verifier: newCredentials.verifier,
+                    old_password_hash: oldPasswordHash,
+                    new_password_hash: newPasswordHash
                 }),
                 credentials: 'include'
             });
@@ -1375,7 +1384,7 @@ class TimelineApp {
                 throw new Error(passwordData.message || 'Failed to change password');
             }
             
-            // Step 4: Update local password for encryption
+            // Step 6: Update local password for encryption
             this.userPassword = newPassword;
             
             // Step 5: Re-import all data with new encryption
@@ -2309,7 +2318,7 @@ class TimelineApp {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ password }),
+                body: JSON.stringify({}), // No password needed - user is already authenticated
                 credentials: 'include'
             });
             
@@ -2368,6 +2377,9 @@ class TimelineApp {
         }
         
         try {
+            // Derive password hash for TOTP encryption
+            const passwordHash = await window.cryptoUtils.derivePasswordHash(this.temp2FAPassword);
+            
             const response = await fetch('/api/2fa/enable', {
                 method: 'POST',
                 headers: {
@@ -2375,7 +2387,7 @@ class TimelineApp {
                 },
                 body: JSON.stringify({
                     totp_code: totpCode,
-                    password: this.temp2FAPassword
+                    password_hash: passwordHash
                 }),
                 credentials: 'include'
             });
@@ -2440,6 +2452,9 @@ class TimelineApp {
         }
         
         try {
+            // Derive password hash for TOTP decryption
+            const passwordHash = await window.cryptoUtils.derivePasswordHash(password);
+            
             const response = await fetch('/api/2fa/disable', {
                 method: 'POST',
                 headers: {
@@ -2447,7 +2462,7 @@ class TimelineApp {
                 },
                 body: JSON.stringify({
                     totp_code: totpCode,
-                    password: password
+                    password_hash: passwordHash
                 }),
                 credentials: 'include'
             });
