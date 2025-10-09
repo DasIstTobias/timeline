@@ -164,30 +164,70 @@ class TimelineApp {
         const totpCode = document.getElementById('totp-code-login').value.trim();
         const rememberMe = document.getElementById('remember-me').checked;
         
-        // If 2FA code is provided, attempt direct login with 2FA
-        if (totpCode) {
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ username, password, remember_me: rememberMe }),
-                    credentials: 'include'
-                });
-                
-                const data = await response.json();
-                
-                if (data.requires_2fa && data.temp_session_id) {
-                    // Now verify with 2FA code
+        try {
+            // Step 1: Initialize SRP authentication
+            const initResponse = await fetch('/api/login/init', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ username }),
+                credentials: 'include'
+            });
+            
+            if (!initResponse.ok) {
+                this.showElementError('login-error', 'Login failed');
+                return;
+            }
+            
+            const initData = await initResponse.json();
+            const { salt, b_pub, session_id } = initData;
+            
+            // Step 2: Compute SRP client values
+            const srpResult = await window.srpClient.startAuthentication(username, password, salt, b_pub);
+            
+            // Step 3: Verify with server
+            const verifyResponse = await fetch('/api/login/verify', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: session_id,
+                    a_pub: srpResult.A,
+                    m1: srpResult.M1,
+                    remember_me: rememberMe
+                }),
+                credentials: 'include'
+            });
+            
+            const verifyData = await verifyResponse.json();
+            
+            // Step 4: Verify server's proof (M2)
+            if (verifyData.m2) {
+                try {
+                    await window.srpClient.verifyServerProof(verifyData.m2);
+                } catch (err) {
+                    this.showElementError('login-error', 'Server authentication failed');
+                    return;
+                }
+            }
+            
+            // Check if 2FA is required
+            if (verifyData.requires_2fa && verifyData.temp_2fa_session_id) {
+                if (totpCode) {
+                    // User provided 2FA code - verify it now
+                    const passwordHash = await window.cryptoUtils.derivePasswordHash(password);
+                    
                     const verify2FAResponse = await fetch('/api/verify-2fa', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({
-                            temp_session_id: data.temp_session_id,
-                            totp_code: totpCode
+                            temp_session_id: verifyData.temp_2fa_session_id,
+                            totp_code: totpCode,
+                            password_hash: passwordHash
                         }),
                         credentials: 'include'
                     });
@@ -204,64 +244,28 @@ class TimelineApp {
                     } else {
                         this.showElementError('login-error', verify2FAData.message || '2FA verification failed');
                     }
-                } else if (data.success) {
-                    // No 2FA required but user provided code - ignore code and proceed
-                    localStorage.setItem('rememberMe', rememberMe.toString());
-                    this.userPassword = password;
-                    this.currentUser = { username, is_admin: data.user_type === 'admin' };
-                    
-                    if (data.user_type === 'admin') {
-                        this.showAdminDashboard();
-                    } else {
-                        await this.loadUserData();
-                        this.showUserTimeline();
-                    }
                 } else {
-                    this.showElementError('login-error', data.message || 'Login failed');
+                    // Show error - user must provide 2FA code
+                    this.showElementError('login-error', '2FA verification required. Please enter your 6-digit code.');
                 }
-            } catch (error) {
-                this.showElementError('login-error', 'Network error. Please try again.');
-            }
-        } else {
-            // No 2FA code provided - proceed with normal login
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ username, password, remember_me: rememberMe }),
-                    credentials: 'include'
-                });
+            } else if (verifyData.success) {
+                // No 2FA required - login successful
+                localStorage.setItem('rememberMe', rememberMe.toString());
+                this.userPassword = password;
+                this.currentUser = { username, is_admin: verifyData.user_type === 'admin' };
                 
-                const data = await response.json();
-                
-                if (data.success) {
-                    // Store remember me preference for this session
-                    localStorage.setItem('rememberMe', rememberMe.toString());
-                    
-                    // Check if 2FA is required
-                    if (data.requires_2fa && data.temp_session_id) {
-                        // Show error - user must provide 2FA code
-                        this.showElementError('login-error', '2FA verification required. Please enter your 6-digit code.');
-                    } else {
-                        // No 2FA required - proceed normally
-                        this.userPassword = password; // Store for encryption
-                        this.currentUser = { username, is_admin: data.user_type === 'admin' };
-                        
-                        if (data.user_type === 'admin') {
-                            this.showAdminDashboard();
-                        } else {
-                            await this.loadUserData();
-                            this.showUserTimeline();
-                        }
-                    }
+                if (verifyData.user_type === 'admin') {
+                    this.showAdminDashboard();
                 } else {
-                    this.showElementError('login-error', data.message || 'Login failed');
+                    await this.loadUserData();
+                    this.showUserTimeline();
                 }
-            } catch (error) {
-                this.showElementError('login-error', 'Network error. Please try again.');
+            } else {
+                this.showElementError('login-error', verifyData.message || 'Login failed');
             }
+        } catch (error) {
+            console.error('Login error:', error);
+            this.showElementError('login-error', 'Network error. Please try again.');
         }
     }
 

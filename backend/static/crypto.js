@@ -97,6 +97,33 @@ class CryptoUtils {
         window.crypto.getRandomValues(array);
         return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
     }
+
+    // Derive a consistent password hash for TOTP encryption and authentication
+    // Uses PBKDF2 with a fixed salt to derive a deterministic hash from password
+    async derivePasswordHash(password) {
+        const encoder = new TextEncoder();
+        const keyMaterial = await window.crypto.subtle.importKey(
+            'raw',
+            encoder.encode(password),
+            { name: 'PBKDF2' },
+            false,
+            ['deriveBits']
+        );
+        
+        const salt = encoder.encode('timeline_auth_hash'); // Fixed salt for auth hash derivation
+        const bits = await window.crypto.subtle.deriveBits(
+            {
+                name: 'PBKDF2',
+                salt: salt,
+                iterations: 100000,
+                hash: 'SHA-256'
+            },
+            keyMaterial,
+            256
+        );
+        
+        return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
 }
 
 // Global instance
