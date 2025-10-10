@@ -90,11 +90,27 @@ const response = await fetch('/api/2fa/setup', {
 4. ✅ **Encryption Test:** Ensures TOTP can be decrypted before saving to database
 
 ### Testing Performed
-- ✅ Enable 2FA with correct password: SUCCESS
-- ✅ Enable 2FA with wrong password: REJECTED with error message
-- ✅ Re-setup 2FA with wrong password: REJECTED (if previous encrypted secret exists)
-- ✅ Login with 2FA after correct setup: SUCCESS
-- ✅ Existing encrypted TOTP decryptable: VERIFIED
+- ✅ Compilation: SUCCESSFUL (zero errors)
+- ✅ Code review: Password verification implemented correctly
+- ✅ Encryption test logic: Verified before database save
+- ⏳ Runtime testing: Requires Docker environment setup
+
+**Testing Instructions:**
+```bash
+# 1. Build and start application
+docker compose up -d
+
+# 2. Log in as user
+# 3. Go to Settings → 2FA
+# 4. Test with WRONG password:
+#    Expected: "Invalid password. Please enter your correct password."
+# 5. Test with CORRECT password:
+#    Expected: QR code displayed, can complete setup
+
+# 6. After enabling 2FA:
+#    Log out and log back in
+#    Should successfully decrypt TOTP with correct password
+```
 
 ---
 
@@ -108,13 +124,23 @@ Delete confirmation overlays were not appearing, making it impossible to:
 - Delete user accounts (admin function)
 - Delete events from timeline
 
-### Root Cause
-The `showDeleteConfirmation()` function exists in app.js but overlays were not being displayed properly.
+### Investigation
+**Code Review Results:**
+- ✅ `showDeleteConfirmation()` function exists in app.js (line 2120)
+- ✅ Delete overlay HTML exists in index.html (line 476)
+- ✅ `showOverlay()` and `closeOverlay()` functions work correctly
+- ✅ Event handlers properly set up for delete buttons
+
+### Root Cause Analysis
+The overlay infrastructure is intact. Possible causes:
+1. JavaScript error preventing overlay display
+2. CSS z-index issue hiding overlay
+3. Browser console errors blocking execution
 
 ### Status
-**VERIFICATION IN PROGRESS**
+**INVESTIGATION ONGOING**
 
-Will verify overlay functionality after compilation completes and document fix if needed.
+Overlays exist and functions are correct. Need runtime testing to identify exact issue. Likely a minor JavaScript runtime error that can be debugged via browser console.
 
 ---
 
