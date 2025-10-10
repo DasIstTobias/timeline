@@ -129,6 +129,19 @@ class TimelineApp {
         document.getElementById('enable-2fa-step2-form').addEventListener('submit', (e) => this.finishEnable2FA(e));
         document.getElementById('disable-2fa-form').addEventListener('submit', (e) => this.finishDisable2FA(e));
         
+        // Event delegation for delete buttons
+        document.addEventListener('click', (e) => {
+            if (e.target.classList.contains('delete-event-btn')) {
+                const eventId = e.target.dataset.eventId;
+                const eventTitle = e.target.dataset.eventTitle;
+                this.deleteEvent(eventId, eventTitle);
+            } else if (e.target.classList.contains('delete-user-btn')) {
+                const userId = e.target.dataset.userId;
+                const username = e.target.dataset.username;
+                this.deleteUser(userId, username);
+            }
+        });
+        
         // Click outside to close menus
         document.addEventListener('click', (e) => this.handleOutsideClick(e));
     }
@@ -628,7 +641,7 @@ class TimelineApp {
                 ${event.tags.map(tag => `<span class="event-tag">${this.escapeHtml(tag)}</span>`).join('')}
             </div>
             <div class="event-footer">
-                <button class="delete-event-btn" onclick="app.deleteEvent('${event.id}', '${this.escapeHtml(event.title)}')">Delete</button>
+                <button class="delete-event-btn" data-event-id="${event.id}" data-event-title="${this.escapeHtml(event.title)}">Delete</button>
             </div>
         `;
         
@@ -905,7 +918,7 @@ class TimelineApp {
                     <div class="user-username">${this.escapeHtml(user.username)}</div>
                     <div class="user-created">Created: ${new Date(user.created_at).toLocaleDateString('en-GB')}</div>
                 </div>
-                <button class="delete-user-btn" onclick="app.deleteUser('${user.id}', '${this.escapeHtml(user.username)}')">Delete</button>
+                <button class="delete-user-btn" data-user-id="${user.id}" data-username="${this.escapeHtml(user.username)}">Delete</button>
             `;
             container.appendChild(userDiv);
         });
