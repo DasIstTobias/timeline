@@ -5,11 +5,14 @@ This is a secure personal timeline application for documenting and managing life
 ## Features
 
 ### Security
+- **SRP-6a Authentication**: Zero-knowledge password authentication - server never sees passwords
 - Client-side zero-knowledge encryption with AES-GCM-256
 - All data encrypted in the browser before transmission
-- Salted passwords hashed with bcrypt
-- Session-based authentication
-- Optional two-factor authentication (2FA)
+- Session-based authentication with secure session management
+- Optional two-factor authentication (2FA) with TOTP
+- Cryptographically secure random number generation
+- Protection against timing attacks and offline brute-force
+- TLS/HTTPS support with automatic certificate generation
 
 ### Event Management
 - Create events with title, description, and timestamp
@@ -100,7 +103,24 @@ Note: Administrators cannot access user data due to zero-knowledge encryption.
 - Deployment: Docker
 
 ### Architecture
-Timeline uses a zero-knowledge architecture where all user data is encrypted in the browser before being sent to the server. Encryption keys are derived from user passwords and never leave the client. This ensures that user data remains private and inaccessible to server administrators.
+Timeline uses a zero-knowledge architecture with SRP-6a authentication where:
+- **Authentication**: Server never sees passwords (SRP-6a protocol with zero-knowledge proof)
+- **Data Encryption**: All user data is encrypted in the browser before transmission (AES-GCM-256)
+- **Key Derivation**: Encryption keys are derived from user passwords using PBKDF2
+- **2FA Protection**: TOTP secrets are encrypted with password-derived keys
+- **Privacy**: User data remains private and inaccessible to server administrators
+
+### Migration from Older Versions
+
+If upgrading from a version using bcrypt authentication, see **MIGRATION_GUIDE.md** for detailed instructions.
+
+**Quick Migration Steps:**
+1. Backup your database: `docker-compose exec database pg_dump -U timeline_user timeline > backup.sql`
+2. Pull latest code: `git pull`
+3. Start application: `docker-compose up -d` (migration runs automatically)
+4. Retrieve new admin password: `cat admin_credentials.txt`
+
+⚠️ **Note**: All user passwords will be reset during migration. See MIGRATION_GUIDE.md for details.
 
 ### Ports
 - HTTP: 8080

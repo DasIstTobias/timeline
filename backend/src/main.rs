@@ -149,6 +149,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let db = PgPool::connect(&database_url).await?;
     
+    // Check if migration is needed (old password_hash column exists)
+    let needs_migration: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'users' AND column_name = 'password_hash'
+        )"
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap_or(false);
+    
+    if needs_migration {
+        log::info!("Database migration needed: Converting from bcrypt to SRP authentication...");
+        
+        // Run migration script
+        let migration_sql = r#"
+            -- Add new SRP columns if they don't exist
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'users' AND column_name = 'srp_salt'
+                ) THEN
+                    ALTER TABLE users ADD COLUMN srp_salt VARCHAR(255);
+                END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'users' AND column_name = 'srp_verifier'
+                ) THEN
+                    ALTER TABLE users ADD COLUMN srp_verifier TEXT;
+                END IF;
+            END $$;
+            
+            -- Set placeholder values for existing users
+            UPDATE users 
+            SET srp_salt = '$placeholder$', 
+                srp_verifier = '$placeholder$'
+            WHERE srp_salt IS NULL OR srp_verifier IS NULL;
+            
+            -- Make the new columns NOT NULL
+            ALTER TABLE users ALTER COLUMN srp_salt SET NOT NULL;
+            ALTER TABLE users ALTER COLUMN srp_verifier SET NOT NULL;
+            
+            -- Drop the old password_hash column
+            ALTER TABLE users DROP COLUMN password_hash;
+        "#;
+        
+        sqlx::raw_sql(migration_sql).execute(&db).await?;
+        log::info!("Migration complete: Database schema updated to SRP authentication");
+    } else {
+        log::info!("Database schema check: Already using SRP authentication");
+    }
+    
     // Generate admin password and update database with SRP credentials
     let admin_password = generate_random_password();
     let (admin_salt, admin_verifier) = srp::generate_srp_credentials("admin", &admin_password);
