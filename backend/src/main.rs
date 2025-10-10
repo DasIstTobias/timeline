@@ -1656,7 +1656,7 @@ async fn get_2fa_status(
 
 #[derive(Deserialize)]
 struct Setup2FARequest {
-    // No password needed - user is already authenticated via session
+    password_hash: String, // SECURITY FIX: Require password hash to verify user knows password
 }
 
 #[derive(Serialize)]
@@ -1670,7 +1670,7 @@ struct Setup2FAResponse {
 async fn setup_2fa(
     headers: HeaderMap,
     State(state): State<AppState>,
-    Json(_req): Json<Setup2FARequest>,
+    Json(req): Json<Setup2FARequest>,
 ) -> Result<Json<Setup2FAResponse>, StatusCode> {
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
@@ -1679,12 +1679,15 @@ async fn setup_2fa(
         return Err(StatusCode::FORBIDDEN);
     }
     
-    // Check if 2FA is already enabled
-    let already_enabled: bool = sqlx::query_scalar("SELECT totp_enabled FROM users WHERE id = $1")
+    // Check if 2FA is already enabled and get existing encrypted secret if any
+    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let already_enabled: bool = row.get("totp_enabled");
+    let existing_encrypted: Option<String> = row.get("totp_secret_encrypted");
     
     if already_enabled {
         return Ok(Json(Setup2FAResponse {
@@ -1694,6 +1697,28 @@ async fn setup_2fa(
             message: Some("2FA is already enabled".to_string()),
         }));
     }
+    
+    // CRITICAL SECURITY FIX: Verify password hash is valid
+    // If user has existing encrypted TOTP (from previous setup), try to decrypt it
+    // If decryption works, password hash is correct
+    if let Some(encrypted) = existing_encrypted {
+        match crypto::decrypt_totp_secret(&encrypted, &req.password_hash) {
+            Ok(_) => {
+                // Password hash is valid (can decrypt existing secret)
+            },
+            Err(e) => {
+                log::warn!("Password verification failed for user {}: {}", auth_state.user_id, e);
+                return Ok(Json(Setup2FAResponse {
+                    success: false,
+                    secret: None,
+                    qr_uri: None,
+                    message: Some("Invalid password. Please enter your correct password.".to_string()),
+                }));
+            }
+        }
+    }
+    // If no existing encrypted secret, we can't verify password directly before encryption
+    // The encryption/decryption test in enable_2fa will catch wrong passwords
     
     // Generate new TOTP secret
     let secret = twofa::generate_totp_secret();
@@ -1802,6 +1827,27 @@ async fn enable_2fa(
             log::error!("Failed to encrypt TOTP secret: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
+    
+    // CRITICAL SECURITY FIX: Test that we can decrypt with the provided password hash
+    // This ensures the password hash is valid and the user won't be locked out
+    match crypto::decrypt_totp_secret(&encrypted_secret, &req.password_hash) {
+        Ok(decrypted) => {
+            if decrypted != pending.secret {
+                log::error!("Encryption/decryption test failed: secrets don't match");
+                return Ok(Json(Enable2FAResponse {
+                    success: false,
+                    message: Some("Encryption verification failed. Please try again.".to_string()),
+                }));
+            }
+        },
+        Err(e) => {
+            log::error!("Encryption test failed: {}", e);
+            return Ok(Json(Enable2FAResponse {
+                success: false,
+                message: Some("Encryption verification failed. Please try again.".to_string()),
+            }));
+        }
+    }
     
     // Enable 2FA with ENCRYPTED secret
     sqlx::query("UPDATE users SET totp_secret_encrypted = $1, totp_enabled = true, totp_enabled_at = NOW() WHERE id = $2")

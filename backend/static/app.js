@@ -2313,12 +2313,15 @@ class TimelineApp {
         this.temp2FAPassword = password;
         
         try {
+            // SECURITY FIX: Derive password hash and send to verify user knows password
+            const passwordHash = await window.cryptoUtils.derivePasswordHash(password);
+            
             const response = await fetch('/api/2fa/setup', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({}), // No password needed - user is already authenticated
+                body: JSON.stringify({ password_hash: passwordHash }),
                 credentials: 'include'
             });
             
