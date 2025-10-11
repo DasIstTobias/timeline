@@ -1688,6 +1688,7 @@ async fn get_2fa_status(
 #[derive(Deserialize)]
 struct Setup2FARequest {
     password_hash: String, // SECURITY FIX: Require password hash to verify user knows password
+    password_verification: String, // Encrypted proof that client has the actual password
 }
 
 #[derive(Serialize)]
@@ -1731,20 +1732,13 @@ async fn setup_2fa(
         }));
     }
     
-    // CRITICAL SECURITY FIX: Verify password by checking if client can complete SRP authentication
-    // The password_hash from client is derived from the password - we need to verify the USER knows the password
-    // We do this by requiring the client to provide an SRP proof alongside the password hash
-    
-    // For now, we'll check if the user has existing encrypted data and try to decrypt it
-    // This works because the password_hash is derived consistently from the actual password
-    if let Some(encrypted) = &existing_encrypted {
-        // Try to decrypt existing TOTP secret
-        match crypto::decrypt_totp_secret(encrypted, &req.password_hash) {
-            Ok(_) => {
-                log::info!("Password verified via existing encrypted TOTP for user {}", auth_state.user_id);
-            },
-            Err(e) => {
-                log::warn!("Password verification failed (existing TOTP) for user {}: {}", auth_state.user_id, e);
+    // CRITICAL SECURITY FIX: Verify password by checking client-provided proof
+    // Client must encrypt a known string with their password to prove they have it
+    const VERIFICATION_STRING: &str = "timeline_2fa_password_verification";
+    match crypto::decrypt_totp_secret(&req.password_verification, &req.password_hash) {
+        Ok(decrypted) => {
+            if decrypted != VERIFICATION_STRING {
+                log::warn!("Password verification failed (incorrect decryption) for user {}", auth_state.user_id);
                 return Ok(Json(Setup2FAResponse {
                     success: false,
                     secret: None,
@@ -1752,69 +1746,16 @@ async fn setup_2fa(
                     message: Some("Invalid password. Please enter your correct password.".to_string()),
                 }));
             }
-        }
-    } else {
-        // For first-time setup, verify by checking user's settings encryption
-        // All users should have encrypted settings - try to verify the password hash can decrypt them
-        let settings_encrypted: Option<String> = sqlx::query_scalar("SELECT settings_encrypted FROM users WHERE id = $1")
-            .bind(auth_state.user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        
-        if let Some(encrypted_settings) = settings_encrypted {
-            // Try to decrypt settings with provided password hash
-            match crypto::decrypt_totp_secret(&encrypted_settings, &req.password_hash) {
-                Ok(_) => {
-                    log::info!("Password verified via encrypted settings for user {}", auth_state.user_id);
-                },
-                Err(e) => {
-                    log::warn!("Password verification failed (settings) for user {}: {}", auth_state.user_id, e);
-                    return Ok(Json(Setup2FAResponse {
-                        success: false,
-                        secret: None,
-                        qr_uri: None,
-                        message: Some("Invalid password. Please enter your correct password.".to_string()),
-                    }));
-                }
-            }
-        } else {
-            // No existing encrypted data - user must have just registered
-            // Perform encryption/decryption test to ensure password hash is valid
-            let test_data = "password_verification_test";
-            let user_id_str = auth_state.user_id.to_string();
-            
-            match crypto::encrypt_totp_secret(test_data, &req.password_hash, &user_id_str) {
-                Ok(encrypted) => {
-                    match crypto::decrypt_totp_secret(&encrypted, &req.password_hash) {
-                        Ok(decrypted) => {
-                            if decrypted != test_data {
-                                log::warn!("Password hash roundtrip failed for user {}", auth_state.user_id);
-                                return Ok(Json(Setup2FAResponse {
-                                    success: false,
-                                    secret: None,
-                                    qr_uri: None,
-                                    message: Some("Invalid password. Please enter your correct password.".to_string()),
-                                }));
-                            }
-                            log::info!("Password verified via roundtrip test for user {}", auth_state.user_id);
-                        },
-                        Err(e) => {
-                            log::warn!("Password verification failed (roundtrip) for user {}: {}", auth_state.user_id, e);
-                            return Ok(Json(Setup2FAResponse {
-                                success: false,
-                                secret: None,
-                                qr_uri: None,
-                                message: Some("Invalid password. Please enter your correct password.".to_string()),
-                            }));
-                        }
-                    }
-                },
-                Err(e) => {
-                    log::error!("Failed to create password test encryption: {}", e);
-                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
-                }
-            }
+            log::info!("Password verified via client proof for user {}", auth_state.user_id);
+        },
+        Err(e) => {
+            log::warn!("Password verification failed (decryption error) for user {}: {}", auth_state.user_id, e);
+            return Ok(Json(Setup2FAResponse {
+                success: false,
+                secret: None,
+                qr_uri: None,
+                message: Some("Invalid password. Please enter your correct password.".to_string()),
+            }));
         }
     }
     

@@ -635,9 +635,15 @@ class TimelineApp {
                 ${event.tags.map(tag => `<span class="event-tag">${this.escapeHtml(tag)}</span>`).join('')}
             </div>
             <div class="event-footer">
-                <button class="delete-event-btn" onclick="app.deleteEvent('${event.id}', '${this.escapeHtml(event.title)}')">Delete</button>
+                <button class="delete-event-btn" data-event-id="${event.id}" data-event-title="${this.escapeHtml(event.title)}">Delete</button>
             </div>
         `;
+        
+        // Add event listener for delete button
+        const deleteBtn = eventDiv.querySelector('.delete-event-btn');
+        deleteBtn.addEventListener('click', () => {
+            this.deleteEvent(event.id, event.title);
+        });
         
         return eventDiv;
     }
@@ -912,9 +918,15 @@ class TimelineApp {
                     <div class="user-username">${this.escapeHtml(user.username)}</div>
                     <div class="user-created">Created: ${new Date(user.created_at).toLocaleDateString('en-GB')}</div>
                 </div>
-                <button class="delete-user-btn" onclick="app.deleteUser('${user.id}', '${this.escapeHtml(user.username)}')">Delete</button>
+                <button class="delete-user-btn" data-user-id="${user.id}" data-username="${this.escapeHtml(user.username)}">Delete</button>
             `;
             container.appendChild(userDiv);
+            
+            // Add event listener for delete button
+            const deleteBtn = userDiv.querySelector('.delete-user-btn');
+            deleteBtn.addEventListener('click', () => {
+                this.deleteUser(user.id, user.username);
+            });
         });
     }
 
@@ -2332,15 +2344,22 @@ class TimelineApp {
         this.temp2FAPassword = password;
         
         try {
-            // SECURITY FIX: Derive password hash and send to verify user knows password
+            // SECURITY FIX: Derive password hash and create verification proof
             const passwordHash = await window.cryptoUtils.derivePasswordHash(password);
+            
+            // Create verification proof by encrypting a known string with the password hash
+            const verificationString = "timeline_2fa_password_verification";
+            const passwordVerification = await window.cryptoUtils.encrypt(verificationString, passwordHash);
             
             const response = await fetch('/api/2fa/setup', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ password_hash: passwordHash }),
+                body: JSON.stringify({ 
+                    password_hash: passwordHash,
+                    password_verification: passwordVerification
+                }),
                 credentials: 'include'
             });
             
