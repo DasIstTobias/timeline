@@ -1318,10 +1318,9 @@ class TimelineApp {
             return;
         }
         
-        if (oldPassword !== this.userPassword) {
-            this.showPasswordError('Current password is incorrect');
-            return;
-        }
+        // SECURITY FIX: For SRP, we cannot compare plaintext passwords client-side
+        // Instead, we'll validate during the password change process on the server
+        // by attempting to re-encrypt TOTP secrets with the old password hash
         
         // Show confirmation overlay
         this.showPasswordConfirmation();
@@ -1998,14 +1997,23 @@ class TimelineApp {
         const newPassword = document.getElementById('admin-new-password').value;
         
         try {
-            const response = await fetch('/api/change-password', {
+            // Generate new SRP credentials for the new password
+            const newCredentials = await window.srpClient.generateCredentials(this.currentUser.username, newPassword);
+            
+            // Derive password hashes (for TOTP re-encryption if needed)
+            const oldPasswordHash = await window.cryptoUtils.derivePasswordHash(oldPassword);
+            const newPasswordHash = await window.cryptoUtils.derivePasswordHash(newPassword);
+            
+            const response = await fetch('/api/admin/change-password', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    old_password: oldPassword,
-                    new_password: newPassword
+                    new_salt: newCredentials.salt,
+                    new_verifier: newCredentials.verifier,
+                    old_password_hash: oldPasswordHash,
+                    new_password_hash: newPasswordHash
                 }),
                 credentials: 'include'
             });
@@ -2013,13 +2021,19 @@ class TimelineApp {
             const data = await response.json();
             
             if (data.success) {
-                this.showSuccess('Password Changed', 'Admin password changed successfully');
+                this.showSuccess('Password Changed', 'Admin password changed successfully. Please log in again with your new password.');
                 this.closeOverlay(document.getElementById('admin-password-overlay'));
                 document.getElementById('admin-password-form').reset();
+                
+                // Log out after password change
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 2000);
             } else {
                 this.showError('Password Change Failed', data.message || 'Failed to change password');
             }
         } catch (error) {
+            console.error('Admin password change error:', error);
             this.showError('Network Error', 'Network error. Please try again.');
         }
     }
@@ -2136,9 +2150,11 @@ class TimelineApp {
             inputGroup.style.display = 'none';
         }
         
-        // Set up confirm button
+        // Remove any existing event listener and set up new one
         const confirmBtn = document.getElementById('confirm-delete');
-        confirmBtn.onclick = onConfirm;
+        const newConfirmBtn = confirmBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+        newConfirmBtn.addEventListener('click', onConfirm);
         
         this.showOverlay('delete-confirmation-overlay');
     }
