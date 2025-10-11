@@ -23,6 +23,7 @@ WORKDIR /app
 COPY --from=builder /app/target/release/timeline-backend /app/timeline-backend
 COPY --from=builder /app/static ./static
 
+# Default ports (can be customized via HTTP_PORT and HTTPS_PORT environment variables)
 EXPOSE 8080
 EXPOSE 8443
 
