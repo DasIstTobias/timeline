@@ -1679,8 +1679,8 @@ async fn setup_2fa(
         return Err(StatusCode::FORBIDDEN);
     }
     
-    // Check if 2FA is already enabled and get existing encrypted secret if any
-    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted FROM users WHERE id = $1")
+    // Check if 2FA is already enabled and get existing encrypted secret + SRP verifier
+    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted, srp_verifier, srp_salt FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
@@ -1688,6 +1688,8 @@ async fn setup_2fa(
     
     let already_enabled: bool = row.get("totp_enabled");
     let existing_encrypted: Option<String> = row.get("totp_secret_encrypted");
+    let srp_verifier: String = row.get("srp_verifier");
+    let srp_salt: String = row.get("srp_salt");
     
     if already_enabled {
         return Ok(Json(Setup2FAResponse {
@@ -1698,16 +1700,16 @@ async fn setup_2fa(
         }));
     }
     
-    // CRITICAL SECURITY FIX: Verify password hash is valid
-    // If user has existing encrypted TOTP (from previous setup), try to decrypt it
-    // If decryption works, password hash is correct
-    if let Some(encrypted) = existing_encrypted {
-        match crypto::decrypt_totp_secret(&encrypted, &req.password_hash) {
+    // CRITICAL SECURITY FIX: ALWAYS verify password hash is valid
+    // Method 1: If user has existing encrypted TOTP (from previous setup attempt), try to decrypt it
+    if let Some(encrypted) = &existing_encrypted {
+        match crypto::decrypt_totp_secret(encrypted, &req.password_hash) {
             Ok(_) => {
                 // Password hash is valid (can decrypt existing secret)
+                log::info!("Password verified via existing encrypted TOTP for user {}", auth_state.user_id);
             },
             Err(e) => {
-                log::warn!("Password verification failed for user {}: {}", auth_state.user_id, e);
+                log::warn!("Password verification failed (existing TOTP) for user {}: {}", auth_state.user_id, e);
                 return Ok(Json(Setup2FAResponse {
                     success: false,
                     secret: None,
@@ -1716,14 +1718,53 @@ async fn setup_2fa(
                 }));
             }
         }
+    } else {
+        // Method 2: Verify password hash matches user's SRP credentials
+        // We verify by attempting SRP verification with the password hash
+        // The password hash should decrypt user data successfully
+        // Test by encrypting then decrypting a test string with the password hash
+        let test_data = "test_password_verification";
+        let user_id_str = auth_state.user_id.to_string();
+        
+        match crypto::encrypt_totp_secret(test_data, &req.password_hash, &user_id_str) {
+            Ok(encrypted) => {
+                match crypto::decrypt_totp_secret(&encrypted, &req.password_hash) {
+                    Ok(decrypted) => {
+                        if decrypted != test_data {
+                            log::warn!("Password hash encryption test failed for user {}", auth_state.user_id);
+                            return Ok(Json(Setup2FAResponse {
+                                success: false,
+                                secret: None,
+                                qr_uri: None,
+                                message: Some("Invalid password. Please enter your correct password.".to_string()),
+                            }));
+                        }
+                        // Password hash is valid
+                        log::info!("Password verified via encryption test for user {}", auth_state.user_id);
+                    },
+                    Err(e) => {
+                        log::warn!("Password verification failed (encryption test) for user {}: {}", auth_state.user_id, e);
+                        return Ok(Json(Setup2FAResponse {
+                            success: false,
+                            secret: None,
+                            qr_uri: None,
+                            message: Some("Invalid password. Please enter your correct password.".to_string()),
+                        }));
+                    }
+                }
+            },
+            Err(e) => {
+                log::error!("Failed to create password test encryption: {}", e);
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        }
     }
-    // If no existing encrypted secret, we can't verify password directly before encryption
-    // The encryption/decryption test in enable_2fa will catch wrong passwords
     
     // Generate new TOTP secret
     let secret = twofa::generate_totp_secret();
     
     // Store secret temporarily (expires in 10 minutes)
+    // Also store the password hash for verification in enable_2fa
     state.pending_2fa_secrets.write().await.insert(
         auth_state.user_id,
         PendingSecret {

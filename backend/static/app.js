@@ -97,6 +97,9 @@ class TimelineApp {
         document.getElementById('confirm-admin-password-change').addEventListener('click', () => this.confirmAdminPasswordChange());
         document.getElementById('cancel-admin-password-change').addEventListener('click', () => this.closeOverlay(document.getElementById('admin-password-confirm-overlay')));
         
+        // Delete confirmation overlay
+        document.getElementById('cancel-delete').addEventListener('click', () => this.closeOverlay(document.getElementById('delete-confirmation-overlay')));
+        
         // Backup
         document.getElementById('export-btn').addEventListener('click', () => this.exportEvents());
         document.getElementById('import-btn').addEventListener('click', () => this.importEvents());
