@@ -26,22 +26,28 @@ services:
     environment:
       DATABASE_URL: postgresql://timeline_user:timeline_password@database:5432/timeline
       RUST_LOG: info
+      # Port Configuration
+      # HTTP_PORT: Port for HTTP server (default: 8080)
+      # HTTPS_PORT: Port for HTTPS server (default: 8443)
+      # These ports are internal to the container. Use docker-compose ports mapping to expose them externally.
+      # HTTP_PORT: "8080"
+      # HTTPS_PORT: "8443"
       # Domain Configuration
       # Comma-separated list of allowed domains (without ports)
       # Examples: "localhost", "192.168.1.10,example.com", "10.2.0.5"
-      # Each domain will be accessible via both HTTP (8080) and HTTPS (8443)
+      # Each domain will be accessible via both HTTP and HTTPS
       # Requests from unlisted domains will be blocked with 403 Forbidden
       DOMAIN: localhost
       # TLS Enforcement
       # When "true": Requires TLS for all connections (either via reverse proxy or direct)
       # When "false": Allows both HTTP and HTTPS connections
-      # Applies to both port 8080 (checks X-Forwarded-Proto header) and 8443 (direct TLS)
+      # Applies to both HTTP and HTTPS ports (checks X-Forwarded-Proto header on HTTP port)
       REQUIRE_TLS: "false"
       # Self-Signed SSL Certificate
-      # When "true": Application generates and uses self-signed TLS certificates on port 8443
-      # When "false": Port 8443 is not opened (expects reverse proxy for HTTPS)
+      # When "true": Application generates and uses self-signed TLS certificates on HTTPS port
+      # When "false": HTTPS port is not opened (expects reverse proxy for HTTPS)
       # Note: When both REQUIRE_TLS and USE_SELF_SIGNED_SSL are "true",
-      #       HTTP requests on port 8080 will auto-redirect to HTTPS on port 8443
+      #       HTTP requests will auto-redirect to HTTPS
       USE_SELF_SIGNED_SSL: "false"
     depends_on:
       - database

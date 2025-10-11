@@ -13,6 +13,8 @@ pub struct TlsConfig {
     pub use_self_signed_ssl: bool,
     pub require_tls: bool,
     pub domains: Vec<String>,
+    pub http_port: u16,
+    pub https_port: u16,
 }
 
 impl TlsConfig {
@@ -34,10 +36,22 @@ impl TlsConfig {
             .filter(|s| !s.is_empty())
             .collect();
         
+        let http_port = std::env::var("HTTP_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(8080);
+        
+        let https_port = std::env::var("HTTPS_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(8443);
+        
         Self {
             use_self_signed_ssl,
             require_tls,
             domains,
+            http_port,
+            https_port,
         }
     }
     
@@ -46,6 +60,8 @@ impl TlsConfig {
         log::info!("  USE_SELF_SIGNED_SSL: {}", self.use_self_signed_ssl);
         log::info!("  REQUIRE_TLS: {}", self.require_tls);
         log::info!("  DOMAIN: {}", self.domains.join(", "));
+        log::info!("  HTTP_PORT: {}", self.http_port);
+        log::info!("  HTTPS_PORT: {}", self.https_port);
         
         if self.require_tls && self.use_self_signed_ssl {
             log::info!("  Mode: Auto-redirect HTTP to HTTPS with self-signed certificates");
@@ -84,24 +100,24 @@ pub async fn generate_self_signed_cert() -> Result<(Vec<u8>, Vec<u8>), Box<dyn s
 }
 
 /// Create CORS layer based on configured domains
-pub fn create_cors_layer(domains: &[String]) -> CorsLayer {
+pub fn create_cors_layer(domains: &[String], http_port: u16, https_port: u16) -> CorsLayer {
     let mut origins = Vec::new();
     
     // Handle localhost specially
     if domains.iter().any(|d| d == "localhost") {
-        origins.push("http://localhost:8080".parse::<HeaderValue>().unwrap());
-        origins.push("http://127.0.0.1:8080".parse::<HeaderValue>().unwrap());
-        origins.push("https://localhost:8443".parse::<HeaderValue>().unwrap());
-        origins.push("https://127.0.0.1:8443".parse::<HeaderValue>().unwrap());
-        log::info!("CORS: Added localhost origins (8080 HTTP, 8443 HTTPS)");
+        origins.push(format!("http://localhost:{}", http_port).parse::<HeaderValue>().unwrap());
+        origins.push(format!("http://127.0.0.1:{}", http_port).parse::<HeaderValue>().unwrap());
+        origins.push(format!("https://localhost:{}", https_port).parse::<HeaderValue>().unwrap());
+        origins.push(format!("https://127.0.0.1:{}", https_port).parse::<HeaderValue>().unwrap());
+        log::info!("CORS: Added localhost origins ({} HTTP, {} HTTPS)", http_port, https_port);
     }
     
     // Add all other domains
     for domain in domains {
         if domain != "localhost" && domain != "127.0.0.1" {
-            origins.push(format!("http://{}:8080", domain).parse::<HeaderValue>().unwrap());
-            origins.push(format!("https://{}:8443", domain).parse::<HeaderValue>().unwrap());
-            log::info!("CORS: Added domain '{}' (8080 HTTP, 8443 HTTPS)", domain);
+            origins.push(format!("http://{}:{}", domain, http_port).parse::<HeaderValue>().unwrap());
+            origins.push(format!("https://{}:{}", domain, https_port).parse::<HeaderValue>().unwrap());
+            log::info!("CORS: Added domain '{}' ({} HTTP, {} HTTPS)", domain, http_port, https_port);
         }
     }
     
@@ -122,7 +138,7 @@ pub fn check_tls_requirement(
         return Ok(());
     }
     
-    // If this is the HTTPS port (8443), TLS is definitely present
+    // If this is the HTTPS port, TLS is definitely present
     if is_https_port {
         return Ok(());
     }
@@ -340,24 +356,26 @@ mod tests {
     }
 }
 
-/// Start HTTP server on port 8080
+/// Start HTTP server on configurable port
 pub async fn start_http_server(
     app: Router,
     tls_config: Arc<RwLock<TlsConfig>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = tls_config.read().await.clone();
+    let http_port = config.http_port;
+    let https_port = config.https_port;
     
     // If both REQUIRE_TLS and USE_SELF_SIGNED_SSL are true, redirect HTTP to HTTPS
     let final_app = if config.require_tls && config.use_self_signed_ssl {
         log::info!("HTTP server will redirect all traffic to HTTPS");
-        Router::new().fallback(|uri: axum::http::Uri, headers: HeaderMap| async move {
+        Router::new().fallback(move |uri: axum::http::Uri, headers: HeaderMap| async move {
             let host = headers.get(header::HOST)
                 .and_then(|h| h.to_str().ok())
                 .unwrap_or("localhost");
             
             // Replace port in host if present
             let host_without_port = host.split(':').next().unwrap_or(host);
-            let new_location = format!("https://{}:8443{}", host_without_port, uri.path());
+            let new_location = format!("https://{}:{}{}", host_without_port, https_port, uri.path());
             
             (
                 StatusCode::MOVED_PERMANENTLY,
@@ -369,7 +387,7 @@ pub async fn start_http_server(
         app
     };
     
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    let addr = SocketAddr::from(([0, 0, 0, 0], http_port));
     log::info!("HTTP server starting on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, final_app).await?;
@@ -377,9 +395,10 @@ pub async fn start_http_server(
     Ok(())
 }
 
-/// Start HTTPS server on port 8443 with self-signed certificate  
+/// Start HTTPS server on configurable port with self-signed certificate  
 pub async fn start_https_server(
     app: Router,
+    https_port: u16,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use rustls::ServerConfig;
     use rustls_pemfile::{certs, private_key};
@@ -400,7 +419,7 @@ pub async fn start_https_server(
     
     let tls_config = Arc::new(tls_config);
     
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8443));
+    let addr = SocketAddr::from(([0, 0, 0, 0], https_port));
     log::info!("HTTPS server starting on {}", addr);
     
     let listener = tokio::net::TcpListener::bind(addr).await?;
