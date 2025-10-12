@@ -97,6 +97,9 @@ class TimelineApp {
         document.getElementById('confirm-admin-password-change').addEventListener('click', () => this.confirmAdminPasswordChange());
         document.getElementById('cancel-admin-password-change').addEventListener('click', () => this.closeOverlay(document.getElementById('admin-password-confirm-overlay')));
         
+        // Delete confirmation overlay
+        document.getElementById('cancel-delete').addEventListener('click', () => this.closeOverlay(document.getElementById('delete-confirmation-overlay')));
+        
         // Backup
         document.getElementById('export-btn').addEventListener('click', () => this.exportEvents());
         document.getElementById('import-btn').addEventListener('click', () => this.importEvents());
@@ -164,30 +167,70 @@ class TimelineApp {
         const totpCode = document.getElementById('totp-code-login').value.trim();
         const rememberMe = document.getElementById('remember-me').checked;
         
-        // If 2FA code is provided, attempt direct login with 2FA
-        if (totpCode) {
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ username, password, remember_me: rememberMe }),
-                    credentials: 'include'
-                });
-                
-                const data = await response.json();
-                
-                if (data.requires_2fa && data.temp_session_id) {
-                    // Now verify with 2FA code
+        try {
+            // Step 1: Initialize SRP authentication
+            const initResponse = await fetch('/api/login/init', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ username }),
+                credentials: 'include'
+            });
+            
+            if (!initResponse.ok) {
+                this.showElementError('login-error', 'Login failed');
+                return;
+            }
+            
+            const initData = await initResponse.json();
+            const { salt, b_pub, session_id } = initData;
+            
+            // Step 2: Compute SRP client values
+            const srpResult = await window.srpClient.startAuthentication(username, password, salt, b_pub);
+            
+            // Step 3: Verify with server
+            const verifyResponse = await fetch('/api/login/verify', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: session_id,
+                    a_pub: srpResult.A,
+                    m1: srpResult.M1,
+                    remember_me: rememberMe
+                }),
+                credentials: 'include'
+            });
+            
+            const verifyData = await verifyResponse.json();
+            
+            // Step 4: Verify server's proof (M2)
+            if (verifyData.m2) {
+                try {
+                    await window.srpClient.verifyServerProof(verifyData.m2);
+                } catch (err) {
+                    this.showElementError('login-error', 'Server authentication failed');
+                    return;
+                }
+            }
+            
+            // Check if 2FA is required
+            if (verifyData.requires_2fa && verifyData.temp_2fa_session_id) {
+                if (totpCode) {
+                    // User provided 2FA code - verify it now
+                    const passwordHash = await window.cryptoUtils.derivePasswordHash(password);
+                    
                     const verify2FAResponse = await fetch('/api/verify-2fa', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({
-                            temp_session_id: data.temp_session_id,
-                            totp_code: totpCode
+                            temp_session_id: verifyData.temp_2fa_session_id,
+                            totp_code: totpCode,
+                            password_hash: passwordHash
                         }),
                         credentials: 'include'
                     });
@@ -204,64 +247,28 @@ class TimelineApp {
                     } else {
                         this.showElementError('login-error', verify2FAData.message || '2FA verification failed');
                     }
-                } else if (data.success) {
-                    // No 2FA required but user provided code - ignore code and proceed
-                    localStorage.setItem('rememberMe', rememberMe.toString());
-                    this.userPassword = password;
-                    this.currentUser = { username, is_admin: data.user_type === 'admin' };
-                    
-                    if (data.user_type === 'admin') {
-                        this.showAdminDashboard();
-                    } else {
-                        await this.loadUserData();
-                        this.showUserTimeline();
-                    }
                 } else {
-                    this.showElementError('login-error', data.message || 'Login failed');
+                    // Show error - user must provide 2FA code
+                    this.showElementError('login-error', '2FA verification required. Please enter your 6-digit code.');
                 }
-            } catch (error) {
-                this.showElementError('login-error', 'Network error. Please try again.');
-            }
-        } else {
-            // No 2FA code provided - proceed with normal login
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ username, password, remember_me: rememberMe }),
-                    credentials: 'include'
-                });
+            } else if (verifyData.success) {
+                // No 2FA required - login successful
+                localStorage.setItem('rememberMe', rememberMe.toString());
+                this.userPassword = password;
+                this.currentUser = { username, is_admin: verifyData.user_type === 'admin' };
                 
-                const data = await response.json();
-                
-                if (data.success) {
-                    // Store remember me preference for this session
-                    localStorage.setItem('rememberMe', rememberMe.toString());
-                    
-                    // Check if 2FA is required
-                    if (data.requires_2fa && data.temp_session_id) {
-                        // Show error - user must provide 2FA code
-                        this.showElementError('login-error', '2FA verification required. Please enter your 6-digit code.');
-                    } else {
-                        // No 2FA required - proceed normally
-                        this.userPassword = password; // Store for encryption
-                        this.currentUser = { username, is_admin: data.user_type === 'admin' };
-                        
-                        if (data.user_type === 'admin') {
-                            this.showAdminDashboard();
-                        } else {
-                            await this.loadUserData();
-                            this.showUserTimeline();
-                        }
-                    }
+                if (verifyData.user_type === 'admin') {
+                    this.showAdminDashboard();
                 } else {
-                    this.showElementError('login-error', data.message || 'Login failed');
+                    await this.loadUserData();
+                    this.showUserTimeline();
                 }
-            } catch (error) {
-                this.showElementError('login-error', 'Network error. Please try again.');
+            } else {
+                this.showElementError('login-error', verifyData.message || 'Login failed');
             }
+        } catch (error) {
+            console.error('Login error:', error);
+            this.showElementError('login-error', 'Network error. Please try again.');
         }
     }
 
@@ -628,9 +635,15 @@ class TimelineApp {
                 ${event.tags.map(tag => `<span class="event-tag">${this.escapeHtml(tag)}</span>`).join('')}
             </div>
             <div class="event-footer">
-                <button class="delete-event-btn" onclick="app.deleteEvent('${event.id}', '${this.escapeHtml(event.title)}')">Delete</button>
+                <button class="delete-event-btn" data-event-id="${event.id}" data-event-title="${this.escapeHtml(event.title)}">Delete</button>
             </div>
         `;
+        
+        // Add event listener for delete button
+        const deleteBtn = eventDiv.querySelector('.delete-event-btn');
+        deleteBtn.addEventListener('click', () => {
+            this.deleteEvent(event.id, event.title);
+        });
         
         return eventDiv;
     }
@@ -905,9 +918,15 @@ class TimelineApp {
                     <div class="user-username">${this.escapeHtml(user.username)}</div>
                     <div class="user-created">Created: ${new Date(user.created_at).toLocaleDateString('en-GB')}</div>
                 </div>
-                <button class="delete-user-btn" onclick="app.deleteUser('${user.id}', '${this.escapeHtml(user.username)}')">Delete</button>
+                <button class="delete-user-btn" data-user-id="${user.id}" data-username="${this.escapeHtml(user.username)}">Delete</button>
             `;
             container.appendChild(userDiv);
+            
+            // Add event listener for delete button
+            const deleteBtn = userDiv.querySelector('.delete-user-btn');
+            deleteBtn.addEventListener('click', () => {
+                this.deleteUser(user.id, user.username);
+            });
         });
     }
 
@@ -1311,10 +1330,9 @@ class TimelineApp {
             return;
         }
         
-        if (oldPassword !== this.userPassword) {
-            this.showPasswordError('Current password is incorrect');
-            return;
-        }
+        // SECURITY FIX: For SRP, we cannot compare plaintext passwords client-side
+        // Instead, we'll validate during the password change process on the server
+        // by attempting to re-encrypt TOTP secrets with the old password hash
         
         // Show confirmation overlay
         this.showPasswordConfirmation();
@@ -1352,15 +1370,24 @@ class TimelineApp {
                 throw new Error('Failed to clear user data');
             }
             
-            // Step 3: Change password in backend
+            // Step 3: Generate new SRP credentials
+            const newCredentials = await window.srpClient.generateCredentials(this.currentUser.username, newPassword);
+            
+            // Step 4: Derive password hashes for TOTP re-encryption
+            const oldPasswordHash = await window.cryptoUtils.derivePasswordHash(oldPassword);
+            const newPasswordHash = await window.cryptoUtils.derivePasswordHash(newPassword);
+            
+            // Step 5: Change password in backend
             const passwordResponse = await fetch('/api/change-password', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    old_password: oldPassword,
-                    new_password: newPassword
+                    new_salt: newCredentials.salt,
+                    new_verifier: newCredentials.verifier,
+                    old_password_hash: oldPasswordHash,
+                    new_password_hash: newPasswordHash
                 }),
                 credentials: 'include'
             });
@@ -1371,7 +1398,7 @@ class TimelineApp {
                 throw new Error(passwordData.message || 'Failed to change password');
             }
             
-            // Step 4: Update local password for encryption
+            // Step 6: Update local password for encryption
             this.userPassword = newPassword;
             
             // Step 5: Re-import all data with new encryption
@@ -1846,6 +1873,19 @@ class TimelineApp {
         doc.setFont('helvetica');
         doc.setTextColor(0, 0, 0); // Black text
         
+        // Convert accent color from hex to RGB
+        const hexToRgb = (hex) => {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : { r: 113, g: 1, b: 147 }; // Default color if parsing fails
+        };
+        
+        const accentColor = this.settings.accentColor || '#710193';
+        const rgb = hexToRgb(accentColor);
+        
         // Helper function to add page numbers
         const addPageNumber = (pageNum) => {
             const pageWidth = doc.internal.pageSize.width;
@@ -1894,12 +1934,12 @@ class TimelineApp {
             }
             
             // Draw timeline line (vertical line on the left)
-            doc.setDrawColor(113, 1, 147); // Accent color in grayscale equivalent
+            doc.setDrawColor(rgb.r, rgb.g, rgb.b);
             doc.setLineWidth(2);
             doc.line(15, yPosition - 5, 15, yPosition + 25);
             
             // Draw timeline dot
-            doc.setFillColor(113, 1, 147);
+            doc.setFillColor(rgb.r, rgb.g, rgb.b);
             doc.circle(15, yPosition + 5, 2, 'F');
             
             // Event title
@@ -1982,14 +2022,23 @@ class TimelineApp {
         const newPassword = document.getElementById('admin-new-password').value;
         
         try {
-            const response = await fetch('/api/change-password', {
+            // Generate new SRP credentials for the new password
+            const newCredentials = await window.srpClient.generateCredentials(this.currentUser.username, newPassword);
+            
+            // Derive password hashes (for TOTP re-encryption if needed)
+            const oldPasswordHash = await window.cryptoUtils.derivePasswordHash(oldPassword);
+            const newPasswordHash = await window.cryptoUtils.derivePasswordHash(newPassword);
+            
+            const response = await fetch('/api/admin/change-password', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    old_password: oldPassword,
-                    new_password: newPassword
+                    new_salt: newCredentials.salt,
+                    new_verifier: newCredentials.verifier,
+                    old_password_hash: oldPasswordHash,
+                    new_password_hash: newPasswordHash
                 }),
                 credentials: 'include'
             });
@@ -1997,13 +2046,19 @@ class TimelineApp {
             const data = await response.json();
             
             if (data.success) {
-                this.showSuccess('Password Changed', 'Admin password changed successfully');
+                this.showSuccess('Password Changed', 'Admin password changed successfully. Please log in again with your new password.');
                 this.closeOverlay(document.getElementById('admin-password-overlay'));
                 document.getElementById('admin-password-form').reset();
+                
+                // Log out after password change
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 2000);
             } else {
                 this.showError('Password Change Failed', data.message || 'Failed to change password');
             }
         } catch (error) {
+            console.error('Admin password change error:', error);
             this.showError('Network Error', 'Network error. Please try again.');
         }
     }
@@ -2120,9 +2175,11 @@ class TimelineApp {
             inputGroup.style.display = 'none';
         }
         
-        // Set up confirm button
+        // Remove any existing event listener and set up new one
         const confirmBtn = document.getElementById('confirm-delete');
-        confirmBtn.onclick = onConfirm;
+        const newConfirmBtn = confirmBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+        newConfirmBtn.addEventListener('click', onConfirm);
         
         this.showOverlay('delete-confirmation-overlay');
     }
@@ -2280,7 +2337,7 @@ class TimelineApp {
         this.showOverlay('enable-2fa-step1-overlay');
     }
 
-    continueEnable2FAStep1(e) {
+    async continueEnable2FAStep1(e) {
         e.preventDefault();
         
         // Get password from form
@@ -2290,9 +2347,67 @@ class TimelineApp {
             return;
         }
         
-        // Close step 1 and start step 2
-        this.closeOverlay(document.getElementById('enable-2fa-step1-overlay'));
-        this.setupEnable2FAStep2(password);
+        try {
+            // SECURITY FIX: Verify password using SRP authentication
+            // Step 1: Initialize SRP authentication for 2FA password verification
+            const initResponse = await fetch('/api/2fa/verify-password/init', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({}),
+                credentials: 'include'
+            });
+            
+            if (!initResponse.ok) {
+                this.showElementError('enable-2fa-step1-error', 'Password verification failed. Please try again.');
+                return;
+            }
+            
+            const initData = await initResponse.json();
+            const { salt, b_pub, session_id } = initData;
+            
+            // Step 2: Compute SRP client values
+            const srpResult = await window.srpClient.startAuthentication(this.currentUser.username, password, salt, b_pub);
+            
+            // Step 3: Verify password with server
+            const verifyResponse = await fetch('/api/2fa/verify-password/verify', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: session_id,
+                    a_pub: srpResult.A,
+                    m1: srpResult.M1
+                }),
+                credentials: 'include'
+            });
+            
+            const verifyData = await verifyResponse.json();
+            
+            if (!verifyData.success) {
+                this.showElementError('enable-2fa-step1-error', verifyData.message || 'Invalid password');
+                return;
+            }
+            
+            // Step 4: Verify server's proof (M2)
+            if (verifyData.m2) {
+                try {
+                    await window.srpClient.verifyServerProof(verifyData.m2);
+                } catch (err) {
+                    this.showElementError('enable-2fa-step1-error', 'Server authentication failed');
+                    return;
+                }
+            }
+            
+            // Password verified successfully! Close step 1 and proceed to step 2
+            this.closeOverlay(document.getElementById('enable-2fa-step1-overlay'));
+            this.setupEnable2FAStep2(password);
+        } catch (error) {
+            console.error('Password verification error:', error);
+            this.showElementError('enable-2fa-step1-error', 'Network error. Please try again.');
+        }
     }
 
     async setupEnable2FAStep2(password) {
@@ -2300,12 +2415,14 @@ class TimelineApp {
         this.temp2FAPassword = password;
         
         try {
+            // Call setup endpoint to generate 2FA secret
+            // Password has already been verified via SRP in continueEnable2FAStep1
             const response = await fetch('/api/2fa/setup', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ password }),
+                body: JSON.stringify({}),
                 credentials: 'include'
             });
             
@@ -2364,6 +2481,9 @@ class TimelineApp {
         }
         
         try {
+            // Derive password hash for TOTP encryption
+            const passwordHash = await window.cryptoUtils.derivePasswordHash(this.temp2FAPassword);
+            
             const response = await fetch('/api/2fa/enable', {
                 method: 'POST',
                 headers: {
@@ -2371,7 +2491,7 @@ class TimelineApp {
                 },
                 body: JSON.stringify({
                     totp_code: totpCode,
-                    password: this.temp2FAPassword
+                    password_hash: passwordHash
                 }),
                 credentials: 'include'
             });
@@ -2436,6 +2556,9 @@ class TimelineApp {
         }
         
         try {
+            // Derive password hash for TOTP decryption
+            const passwordHash = await window.cryptoUtils.derivePasswordHash(password);
+            
             const response = await fetch('/api/2fa/disable', {
                 method: 'POST',
                 headers: {
@@ -2443,7 +2566,7 @@ class TimelineApp {
                 },
                 body: JSON.stringify({
                     totp_code: totpCode,
-                    password: password
+                    password_hash: passwordHash
                 }),
                 credentials: 'include'
             });

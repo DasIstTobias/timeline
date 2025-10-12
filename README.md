@@ -5,11 +5,12 @@ This is a secure personal timeline application for documenting and managing life
 ## Features
 
 ### Security
+- Secure Remote Password (SRP) authentication
 - Client-side zero-knowledge encryption with AES-GCM-256
 - All data encrypted in the browser before transmission
-- Salted passwords hashed with bcrypt
 - Session-based authentication
-- Optional two-factor authentication (2FA)
+- Optional two-factor authentication (2FA) with TOTP
+- TLS/HTTPS support with automatic self signed certificate generation
 
 ### Event Management
 - Create events with title, description, and timestamp
@@ -98,9 +99,6 @@ Note: Administrators cannot access user data due to zero-knowledge encryption.
 - Database: PostgreSQL
 - Frontend: HTML, CSS, JavaScript
 - Deployment: Docker
-
-### Architecture
-Timeline uses a zero-knowledge architecture where all user data is encrypted in the browser before being sent to the server. Encryption keys are derived from user passwords and never leave the client. This ensures that user data remains private and inaccessible to server administrators.
 
 ### Ports
 - HTTP: 8080
