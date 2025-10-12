@@ -42,13 +42,13 @@ services:
       # When "true": Requires TLS for all connections (either via reverse proxy or direct)
       # When "false": Allows both HTTP and HTTPS connections
       # Applies to both HTTP and HTTPS ports (checks X-Forwarded-Proto header on HTTP port)
-      REQUIRE_TLS: "false"
+      REQUIRE_TLS: "true"
       # Self-Signed SSL Certificate
       # When "true": Application generates and uses self-signed TLS certificates on HTTPS port
       # When "false": HTTPS port is not opened (expects reverse proxy for HTTPS)
       # Note: When both REQUIRE_TLS and USE_SELF_SIGNED_SSL are "true",
       #       HTTP requests will auto-redirect to HTTPS
-      USE_SELF_SIGNED_SSL: "false"
+      USE_SELF_SIGNED_SSL: "true"
     depends_on:
       - database
     networks:
