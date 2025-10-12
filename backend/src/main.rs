@@ -313,6 +313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let pending_2fa_cleanup = http_app_state.pending_2fa.clone();
         let pending_secrets_cleanup = http_app_state.pending_2fa_secrets.clone();
         let pending_srp_cleanup = http_app_state.pending_srp.clone();
+        let pending_2fa_password_verify_cleanup = http_app_state.pending_2fa_password_verify.clone();
         
         tokio::spawn(async move {
             loop {
@@ -361,6 +362,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 });
                 log::info!("Cleaned up expired pending SRP sessions");
+            }
+        });
+        
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+                let now = std::time::SystemTime::now();
+                let mut verify_sessions = pending_2fa_password_verify_cleanup.write().await;
+                verify_sessions.retain(|_, srp_auth| {
+                    if let Ok(elapsed) = now.duration_since(srp_auth.created_at) {
+                        elapsed.as_secs() <= 300 // 5 minutes
+                    } else {
+                        false
+                    }
+                });
+                log::info!("Cleaned up expired 2FA password verification sessions");
             }
         });
         
