@@ -2324,7 +2324,7 @@ class TimelineApp {
         this.showOverlay('enable-2fa-step1-overlay');
     }
 
-    continueEnable2FAStep1(e) {
+    async continueEnable2FAStep1(e) {
         e.preventDefault();
         
         // Get password from form
@@ -2334,9 +2334,67 @@ class TimelineApp {
             return;
         }
         
-        // Close step 1 and start step 2
-        this.closeOverlay(document.getElementById('enable-2fa-step1-overlay'));
-        this.setupEnable2FAStep2(password);
+        try {
+            // SECURITY FIX: Verify password using SRP authentication
+            // Step 1: Initialize SRP authentication for 2FA password verification
+            const initResponse = await fetch('/api/2fa/verify-password/init', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({}),
+                credentials: 'include'
+            });
+            
+            if (!initResponse.ok) {
+                this.showElementError('enable-2fa-step1-error', 'Password verification failed. Please try again.');
+                return;
+            }
+            
+            const initData = await initResponse.json();
+            const { salt, b_pub, session_id } = initData;
+            
+            // Step 2: Compute SRP client values
+            const srpResult = await window.srpClient.startAuthentication(this.currentUser.username, password, salt, b_pub);
+            
+            // Step 3: Verify password with server
+            const verifyResponse = await fetch('/api/2fa/verify-password/verify', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: session_id,
+                    a_pub: srpResult.A,
+                    m1: srpResult.M1
+                }),
+                credentials: 'include'
+            });
+            
+            const verifyData = await verifyResponse.json();
+            
+            if (!verifyData.success) {
+                this.showElementError('enable-2fa-step1-error', verifyData.message || 'Invalid password');
+                return;
+            }
+            
+            // Step 4: Verify server's proof (M2)
+            if (verifyData.m2) {
+                try {
+                    await window.srpClient.verifyServerProof(verifyData.m2);
+                } catch (err) {
+                    this.showElementError('enable-2fa-step1-error', 'Server authentication failed');
+                    return;
+                }
+            }
+            
+            // Password verified successfully! Close step 1 and proceed to step 2
+            this.closeOverlay(document.getElementById('enable-2fa-step1-overlay'));
+            this.setupEnable2FAStep2(password);
+        } catch (error) {
+            console.error('Password verification error:', error);
+            this.showElementError('enable-2fa-step1-error', 'Network error. Please try again.');
+        }
     }
 
     async setupEnable2FAStep2(password) {
@@ -2344,22 +2402,14 @@ class TimelineApp {
         this.temp2FAPassword = password;
         
         try {
-            // SECURITY FIX: Derive password hash and create verification proof
-            const passwordHash = await window.cryptoUtils.derivePasswordHash(password);
-            
-            // Create verification proof by encrypting a known string with the password hash
-            const verificationString = "timeline_2fa_password_verification";
-            const passwordVerification = await window.cryptoUtils.encrypt(verificationString, passwordHash);
-            
+            // Call setup endpoint to generate 2FA secret
+            // Password has already been verified via SRP in continueEnable2FAStep1
             const response = await fetch('/api/2fa/setup', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ 
-                    password_hash: passwordHash,
-                    password_verification: passwordVerification
-                }),
+                body: JSON.stringify({}),
                 credentials: 'include'
             });
             
