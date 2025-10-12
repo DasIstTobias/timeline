@@ -1346,31 +1346,7 @@ class TimelineApp {
         const newPassword = document.getElementById('new-password').value;
         
         try {
-            // Step 1: Create temporary unencrypted backup of all data
-            const backupData = {
-                events: this.events.map(event => ({
-                    title: event.title,
-                    description: event.description,
-                    timestamp: event.timestamp.toISOString(),
-                    tags: event.tags
-                })),
-                settings: this.settings,
-                notes: this.notes,
-                profilePicture: this.profilePicture,
-                exported_at: new Date().toISOString()
-            };
-            
-            // Step 2: Clear all user data from backend
-            const clearResponse = await fetch('/api/user-data', {
-                method: 'POST',
-                credentials: 'include'
-            });
-            
-            if (!clearResponse.ok) {
-                throw new Error('Failed to clear user data');
-            }
-            
-            // Step 3: Initialize password change with SRP verification
+            // Step 1: Initialize password change with SRP verification
             const initResponse = await fetch('/api/change-password/init', {
                 method: 'POST',
                 headers: {
@@ -1386,7 +1362,7 @@ class TimelineApp {
             
             const initData = await initResponse.json();
             
-            // Step 4: Perform SRP authentication with old password to verify it
+            // Step 2: Perform SRP authentication with old password to verify it
             const srpAuth = await window.srpClient.startAuthentication(
                 this.currentUser.username,
                 oldPassword,
@@ -1394,14 +1370,14 @@ class TimelineApp {
                 initData.b_pub
             );
             
-            // Step 5: Generate new SRP credentials
+            // Step 3: Generate new SRP credentials
             const newCredentials = await window.srpClient.generateCredentials(this.currentUser.username, newPassword);
             
-            // Step 6: Derive password hashes for TOTP re-encryption
+            // Step 4: Derive password hashes for TOTP re-encryption
             const oldPasswordHash = await window.cryptoUtils.derivePasswordHash(oldPassword);
             const newPasswordHash = await window.cryptoUtils.derivePasswordHash(newPassword);
             
-            // Step 7: Verify old password and change to new password
+            // Step 5: Verify old password and change to new password in backend
             const passwordResponse = await fetch('/api/change-password/verify', {
                 method: 'POST',
                 headers: {
@@ -1423,6 +1399,32 @@ class TimelineApp {
             
             if (!passwordData.success) {
                 throw new Error(passwordData.message || 'Failed to change password');
+            }
+            
+            // Password verification successful! Now handle data re-encryption
+            
+            // Step 6: Create temporary unencrypted backup of all data
+            const backupData = {
+                events: this.events.map(event => ({
+                    title: event.title,
+                    description: event.description,
+                    timestamp: event.timestamp.toISOString(),
+                    tags: event.tags
+                })),
+                settings: this.settings,
+                notes: this.notes,
+                profilePicture: this.profilePicture,
+                exported_at: new Date().toISOString()
+            };
+            
+            // Step 7: Clear all user data from backend
+            const clearResponse = await fetch('/api/user-data', {
+                method: 'POST',
+                credentials: 'include'
+            });
+            
+            if (!clearResponse.ok) {
+                throw new Error('Failed to clear user data');
             }
             
             // Step 8: Update local password for encryption
