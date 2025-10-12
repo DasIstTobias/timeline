@@ -13,21 +13,6 @@ pub fn generate_random_password() -> String {
         .collect()
 }
 
-pub async fn hash_password(password: &str) -> Result<String, bcrypt::BcryptError> {
-    let password = password.to_string();
-    tokio::task::spawn_blocking(move || {
-        bcrypt::hash(password, bcrypt::DEFAULT_COST)
-    }).await.unwrap()
-}
-
-pub async fn verify_password(password: &str, hash: &str) -> Result<bool, bcrypt::BcryptError> {
-    let password = password.to_string();
-    let hash = hash.to_string();
-    tokio::task::spawn_blocking(move || {
-        bcrypt::verify(password, &hash)
-    }).await.unwrap()
-}
-
 /// Derive encryption key from password using PBKDF2
 /// Uses same parameters as frontend (100,000 iterations)
 fn derive_key_from_password(password: &str, salt: &[u8]) -> Vec<u8> {
@@ -100,4 +85,18 @@ pub fn decrypt_totp_secret(encrypted: &str, password: &str) -> Result<String, St
     
     String::from_utf8(plaintext)
         .map_err(|e| format!("UTF-8 error: {}", e))
+}
+
+/// Derive a consistent password hash for TOTP encryption
+/// This is used client-side and server-side to encrypt/decrypt TOTP secrets
+/// Uses PBKDF2 with a fixed salt to derive a deterministic hash from password
+pub fn derive_password_hash(password: &str) -> String {
+    use pbkdf2::pbkdf2_hmac;
+    use sha2::Sha256;
+    
+    let salt = b"timeline_auth_hash"; // Fixed salt for auth hash derivation
+    let mut hash = vec![0u8; 32];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, 100_000, &mut hash);
+    
+    hex::encode(hash)
 }
