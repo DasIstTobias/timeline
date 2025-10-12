@@ -58,6 +58,7 @@ struct AppData {
     pending_2fa: Arc<RwLock<HashMap<String, Pending2FAAuth>>>, // temp_session_id -> pending auth
     pending_2fa_secrets: Arc<RwLock<HashMap<Uuid, PendingSecret>>>, // user_id -> pending secret
     pending_srp: Arc<RwLock<HashMap<String, PendingSrpAuth>>>, // temp_session_id -> SRP ephemeral data
+    pending_2fa_password_verify: Arc<RwLock<HashMap<String, PendingSrpAuth>>>, // temp_session_id -> SRP auth for 2FA password verification
     twofa_protection: Arc<TwoFABruteForceProtection>,
     login_rate_limiter: Arc<RwLock<HashMap<String, LoginRateLimit>>>, // IP -> rate limit data
     tls_config: Arc<RwLock<TlsConfig>>,
@@ -126,6 +127,7 @@ impl Drop for PendingSrpAuth {
 struct PendingSecret {
     secret: String,
     created_at: std::time::SystemTime,
+    password_verified: bool, // Track if password was verified via SRP
 }
 
 impl Drop for PendingSecret {
@@ -263,6 +265,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/notes", get(get_notes))
         .route("/api/notes", post(save_notes))
         .route("/api/2fa/status", get(get_2fa_status))
+        .route("/api/2fa/verify-password/init", post(verify_password_for_2fa_init))
+        .route("/api/2fa/verify-password/verify", post(verify_password_for_2fa_verify))
         .route("/api/2fa/setup", post(setup_2fa))
         .route("/api/2fa/enable", post(enable_2fa))
         .route("/api/2fa/disable", post(disable_2fa))
@@ -283,6 +287,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_2fa: Arc::new(RwLock::new(HashMap::new())),
             pending_2fa_secrets: Arc::new(RwLock::new(HashMap::new())),
             pending_srp: Arc::new(RwLock::new(HashMap::new())),
+            pending_2fa_password_verify: Arc::new(RwLock::new(HashMap::new())),
             twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
             login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
             tls_config: tls_config.clone(),
@@ -296,6 +301,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_2fa: http_app_state.pending_2fa.clone(),
             pending_2fa_secrets: http_app_state.pending_2fa_secrets.clone(),
             pending_srp: http_app_state.pending_srp.clone(),
+            pending_2fa_password_verify: http_app_state.pending_2fa_password_verify.clone(),
             twofa_protection: http_app_state.twofa_protection.clone(),
             login_rate_limiter: http_app_state.login_rate_limiter.clone(),
             tls_config: tls_config.clone(),
@@ -307,6 +313,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let pending_2fa_cleanup = http_app_state.pending_2fa.clone();
         let pending_secrets_cleanup = http_app_state.pending_2fa_secrets.clone();
         let pending_srp_cleanup = http_app_state.pending_srp.clone();
+        let pending_2fa_password_verify_cleanup = http_app_state.pending_2fa_password_verify.clone();
         
         tokio::spawn(async move {
             loop {
@@ -358,6 +365,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
         
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+                let now = std::time::SystemTime::now();
+                let mut verify_sessions = pending_2fa_password_verify_cleanup.write().await;
+                verify_sessions.retain(|_, srp_auth| {
+                    if let Ok(elapsed) = now.duration_since(srp_auth.created_at) {
+                        elapsed.as_secs() <= 300 // 5 minutes
+                    } else {
+                        false
+                    }
+                });
+                log::info!("Cleaned up expired 2FA password verification sessions");
+            }
+        });
+        
         let http_app = base_router.clone().layer(cors.clone()).with_state(http_app_state);
         let https_app = base_router.layer(cors).with_state(https_app_state);
         
@@ -380,6 +403,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_2fa: Arc::new(RwLock::new(HashMap::new())),
             pending_2fa_secrets: Arc::new(RwLock::new(HashMap::new())),
             pending_srp: Arc::new(RwLock::new(HashMap::new())),
+            pending_2fa_password_verify: Arc::new(RwLock::new(HashMap::new())),
             twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
             login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
             tls_config: tls_config.clone(),
@@ -1685,10 +1709,203 @@ async fn get_2fa_status(
     }))
 }
 
+// SECURITY FIX: New SRP-based password verification for 2FA setup
+#[derive(Deserialize)]
+struct VerifyPasswordFor2FAInitRequest {
+    // No parameters needed - we get user from session
+}
+
+#[derive(Serialize)]
+struct VerifyPasswordFor2FAInitResponse {
+    salt: String,
+    b_pub: String,
+    session_id: String,
+}
+
+async fn verify_password_for_2fa_init(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(_req): Json<VerifyPasswordFor2FAInitRequest>,
+) -> Result<Json<VerifyPasswordFor2FAInitResponse>, StatusCode> {
+    // Verify the user has a valid session
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Get user's SRP salt and verifier from database
+    let row = sqlx::query("SELECT srp_salt, srp_verifier FROM users WHERE id = $1")
+        .bind(auth_state.user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let salt_hex: String = row.get("srp_salt");
+    let verifier_hex: String = row.get("srp_verifier");
+    
+    let salt = hex::decode(&salt_hex).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let verifier = hex::decode(&verifier_hex).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Generate server's ephemeral values
+    let server_eph = srp::srp_begin_authentication(&auth_state.username, &salt, &verifier)
+        .map_err(|e| {
+            log::error!("SRP begin failed for 2FA password verification: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    // Store ephemeral data temporarily
+    let temp_session_id = uuid::Uuid::new_v4().to_string();
+    state.pending_2fa_password_verify.write().await.insert(temp_session_id.clone(), PendingSrpAuth {
+        username: auth_state.username.clone(),
+        b_priv: server_eph.b_priv,
+        b_pub: server_eph.b_pub.clone(),
+        verifier,
+        salt: salt.clone(),
+        created_at: std::time::SystemTime::now(),
+    });
+    
+    Ok(Json(VerifyPasswordFor2FAInitResponse {
+        salt: salt_hex,
+        b_pub: hex::encode(server_eph.b_pub),
+        session_id: temp_session_id,
+    }))
+}
+
+#[derive(Deserialize)]
+struct VerifyPasswordFor2FAVerifyRequest {
+    session_id: String,
+    a_pub: String,
+    m1: String,
+}
+
+#[derive(Serialize)]
+struct VerifyPasswordFor2FAVerifyResponse {
+    success: bool,
+    m2: Option<String>,
+    message: Option<String>,
+}
+
+async fn verify_password_for_2fa_verify(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<VerifyPasswordFor2FAVerifyRequest>,
+) -> Result<Json<VerifyPasswordFor2FAVerifyResponse>, StatusCode> {
+    // Verify the user still has a valid session
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Get pending SRP auth for 2FA password verification
+    let pending = {
+        let map = state.pending_2fa_password_verify.read().await;
+        map.get(&req.session_id).cloned()
+    };
+    
+    let pending = match pending {
+        Some(p) => p,
+        None => {
+            return Ok(Json(VerifyPasswordFor2FAVerifyResponse {
+                success: false,
+                m2: None,
+                message: Some("Invalid or expired session".to_string()),
+            }));
+        }
+    };
+    
+    // Check expiration (5 minutes)
+    if pending.created_at.elapsed().unwrap_or_default() > std::time::Duration::from_secs(300) {
+        state.pending_2fa_password_verify.write().await.remove(&req.session_id);
+        return Ok(Json(VerifyPasswordFor2FAVerifyResponse {
+            success: false,
+            m2: None,
+            message: Some("Session expired".to_string()),
+        }));
+    }
+    
+    // Verify username matches (security check)
+    if pending.username != auth_state.username {
+        state.pending_2fa_password_verify.write().await.remove(&req.session_id);
+        return Ok(Json(VerifyPasswordFor2FAVerifyResponse {
+            success: false,
+            m2: None,
+            message: Some("Invalid session".to_string()),
+        }));
+    }
+    
+    // Decode client's public ephemeral and M1
+    let a_pub = match hex::decode(&req.a_pub) {
+        Ok(a) => a,
+        Err(_) => {
+            return Ok(Json(VerifyPasswordFor2FAVerifyResponse {
+                success: false,
+                m2: None,
+                message: Some("Invalid credentials".to_string()),
+            }));
+        }
+    };
+    
+    let m1 = match hex::decode(&req.m1) {
+        Ok(m) => m,
+        Err(_) => {
+            return Ok(Json(VerifyPasswordFor2FAVerifyResponse {
+                success: false,
+                m2: None,
+                message: Some("Invalid credentials".to_string()),
+            }));
+        }
+    };
+    
+    // Verify SRP
+    let m2 = match srp::srp_verify_session(
+        &pending.username,
+        &pending.salt,
+        &pending.verifier,
+        &a_pub,
+        &pending.b_priv,
+        &m1,
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            log::debug!("SRP verification failed for 2FA password verification: {}", e);
+            state.pending_2fa_password_verify.write().await.remove(&req.session_id);
+            return Ok(Json(VerifyPasswordFor2FAVerifyResponse {
+                success: false,
+                m2: None,
+                message: Some("Invalid password".to_string()),
+            }));
+        }
+    };
+    
+    // Password verified successfully!
+    // Mark this in the user's pending 2FA secret (if one exists) or create a new one
+    state.pending_2fa_secrets.write().await.entry(auth_state.user_id).or_insert_with(|| {
+        PendingSecret {
+            secret: String::new(), // Will be filled in by setup_2fa
+            created_at: std::time::SystemTime::now(),
+            password_verified: false,
+        }
+    }).password_verified = true;
+    
+    // Clean up the SRP session
+    state.pending_2fa_password_verify.write().await.remove(&req.session_id);
+    
+    log::info!("Password verified for 2FA setup for user {}", auth_state.user_id);
+    
+    Ok(Json(VerifyPasswordFor2FAVerifyResponse {
+        success: true,
+        m2: Some(hex::encode(m2)),
+        message: None,
+    }))
+}
+
 #[derive(Deserialize)]
 struct Setup2FARequest {
-    password_hash: String, // SECURITY FIX: Require password hash to verify user knows password
-    password_verification: String, // Encrypted proof that client has the actual password
+    // Removed: password_hash and password_verification (flawed mechanism)
 }
 
 #[derive(Serialize)]
@@ -1702,7 +1919,7 @@ struct Setup2FAResponse {
 async fn setup_2fa(
     headers: HeaderMap,
     State(state): State<AppState>,
-    Json(req): Json<Setup2FARequest>,
+    Json(_req): Json<Setup2FARequest>,
 ) -> Result<Json<Setup2FAResponse>, StatusCode> {
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
@@ -1711,17 +1928,14 @@ async fn setup_2fa(
         return Err(StatusCode::FORBIDDEN);
     }
     
-    // Check if 2FA is already enabled and get existing encrypted secret + SRP verifier
-    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted, srp_verifier, srp_salt FROM users WHERE id = $1")
+    // Check if 2FA is already enabled
+    let row = sqlx::query("SELECT totp_enabled FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     let already_enabled: bool = row.get("totp_enabled");
-    let existing_encrypted: Option<String> = row.get("totp_secret_encrypted");
-    let srp_verifier: String = row.get("srp_verifier");
-    let srp_salt: String = row.get("srp_salt");
     
     if already_enabled {
         return Ok(Json(Setup2FAResponse {
@@ -1732,47 +1946,40 @@ async fn setup_2fa(
         }));
     }
     
-    // CRITICAL SECURITY FIX: Verify password by checking client-provided proof
-    // Client must encrypt a known string with their password to prove they have it
-    const VERIFICATION_STRING: &str = "timeline_2fa_password_verification";
-    match crypto::decrypt_totp_secret(&req.password_verification, &req.password_hash) {
-        Ok(decrypted) => {
-            if decrypted != VERIFICATION_STRING {
-                log::warn!("Password verification failed (incorrect decryption) for user {}", auth_state.user_id);
-                return Ok(Json(Setup2FAResponse {
-                    success: false,
-                    secret: None,
-                    qr_uri: None,
-                    message: Some("Invalid password. Please enter your correct password.".to_string()),
-                }));
-            }
-            log::info!("Password verified via client proof for user {}", auth_state.user_id);
-        },
-        Err(e) => {
-            log::warn!("Password verification failed (decryption error) for user {}: {}", auth_state.user_id, e);
-            return Ok(Json(Setup2FAResponse {
-                success: false,
-                secret: None,
-                qr_uri: None,
-                message: Some("Invalid password. Please enter your correct password.".to_string()),
-            }));
-        }
+    // SECURITY FIX: Check if password was verified via SRP
+    let password_verified = {
+        let secrets = state.pending_2fa_secrets.read().await;
+        secrets.get(&auth_state.user_id)
+            .map(|s| s.password_verified)
+            .unwrap_or(false)
+    };
+    
+    if !password_verified {
+        log::warn!("Attempt to setup 2FA without password verification for user {}", auth_state.user_id);
+        return Ok(Json(Setup2FAResponse {
+            success: false,
+            secret: None,
+            qr_uri: None,
+            message: Some("Password verification required. Please verify your password first.".to_string()),
+        }));
     }
     
     // Generate new TOTP secret
     let secret = twofa::generate_totp_secret();
     
-    // Store secret temporarily (expires in 10 minutes)
-    // Also store the password hash for verification in enable_2fa
+    // Store secret temporarily (expires in 10 minutes) and maintain password_verified flag
     state.pending_2fa_secrets.write().await.insert(
         auth_state.user_id,
         PendingSecret {
             secret: secret.clone(),
             created_at: std::time::SystemTime::now(),
+            password_verified: true,
         }
     );
     
     let qr_uri = twofa::generate_totp_uri(&secret, &auth_state.username, "Timeline");
+    
+    log::info!("2FA setup initiated for user {} after password verification", auth_state.user_id);
     
     Ok(Json(Setup2FAResponse {
         success: true,
