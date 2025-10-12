@@ -59,6 +59,8 @@ struct AppData {
     pending_2fa_secrets: Arc<RwLock<HashMap<Uuid, PendingSecret>>>, // user_id -> pending secret
     pending_srp: Arc<RwLock<HashMap<String, PendingSrpAuth>>>, // temp_session_id -> SRP ephemeral data
     pending_2fa_password_verify: Arc<RwLock<HashMap<String, PendingSrpAuth>>>, // temp_session_id -> SRP auth for 2FA password verification
+    pending_password_change: Arc<RwLock<HashMap<String, PendingSrpAuth>>>, // temp_session_id -> SRP auth for password change
+    pending_admin_password_change: Arc<RwLock<HashMap<String, PendingSrpAuth>>>, // temp_session_id -> SRP auth for admin password change
     twofa_protection: Arc<TwoFABruteForceProtection>,
     login_rate_limiter: Arc<RwLock<HashMap<String, LoginRateLimit>>>, // IP -> rate limit data
     tls_config: Arc<RwLock<TlsConfig>>,
@@ -249,8 +251,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/logout", post(logout))
         .route("/api/user-info", get(get_user_info))
         .route("/api/register", post(register))
-        .route("/api/change-password", post(change_password))
-        .route("/api/admin/change-password", post(change_admin_password))
+        .route("/api/change-password/init", post(change_password_init))
+        .route("/api/change-password/verify", post(change_password_verify))
+        .route("/api/admin/change-password/init", post(change_admin_password_init))
+        .route("/api/admin/change-password/verify", post(change_admin_password_verify))
         .route("/api/users", get(list_users))
         .route("/api/users", post(register))
         .route("/api/users/:id", post(delete_user))
@@ -288,6 +292,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_2fa_secrets: Arc::new(RwLock::new(HashMap::new())),
             pending_srp: Arc::new(RwLock::new(HashMap::new())),
             pending_2fa_password_verify: Arc::new(RwLock::new(HashMap::new())),
+            pending_password_change: Arc::new(RwLock::new(HashMap::new())),
+            pending_admin_password_change: Arc::new(RwLock::new(HashMap::new())),
             twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
             login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
             tls_config: tls_config.clone(),
@@ -302,6 +308,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_2fa_secrets: http_app_state.pending_2fa_secrets.clone(),
             pending_srp: http_app_state.pending_srp.clone(),
             pending_2fa_password_verify: http_app_state.pending_2fa_password_verify.clone(),
+            pending_password_change: http_app_state.pending_password_change.clone(),
+            pending_admin_password_change: http_app_state.pending_admin_password_change.clone(),
             twofa_protection: http_app_state.twofa_protection.clone(),
             login_rate_limiter: http_app_state.login_rate_limiter.clone(),
             tls_config: tls_config.clone(),
@@ -314,6 +322,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let pending_secrets_cleanup = http_app_state.pending_2fa_secrets.clone();
         let pending_srp_cleanup = http_app_state.pending_srp.clone();
         let pending_2fa_password_verify_cleanup = http_app_state.pending_2fa_password_verify.clone();
+        let pending_password_change_cleanup = http_app_state.pending_password_change.clone();
+        let pending_admin_password_change_cleanup = http_app_state.pending_admin_password_change.clone();
         
         tokio::spawn(async move {
             loop {
@@ -381,6 +391,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
         
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+                let now = std::time::SystemTime::now();
+                let mut password_change_sessions = pending_password_change_cleanup.write().await;
+                password_change_sessions.retain(|_, srp_auth| {
+                    if let Ok(elapsed) = now.duration_since(srp_auth.created_at) {
+                        elapsed.as_secs() <= 300 // 5 minutes
+                    } else {
+                        false
+                    }
+                });
+                log::info!("Cleaned up expired password change sessions");
+            }
+        });
+        
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+                let now = std::time::SystemTime::now();
+                let mut admin_password_change_sessions = pending_admin_password_change_cleanup.write().await;
+                admin_password_change_sessions.retain(|_, srp_auth| {
+                    if let Ok(elapsed) = now.duration_since(srp_auth.created_at) {
+                        elapsed.as_secs() <= 300 // 5 minutes
+                    } else {
+                        false
+                    }
+                });
+                log::info!("Cleaned up expired admin password change sessions");
+            }
+        });
+        
         let http_app = base_router.clone().layer(cors.clone()).with_state(http_app_state);
         let https_app = base_router.layer(cors).with_state(https_app_state);
         
@@ -405,6 +447,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_2fa_secrets: Arc::new(RwLock::new(HashMap::new())),
             pending_srp: Arc::new(RwLock::new(HashMap::new())),
             pending_2fa_password_verify: Arc::new(RwLock::new(HashMap::new())),
+            pending_password_change: Arc::new(RwLock::new(HashMap::new())),
+            pending_admin_password_change: Arc::new(RwLock::new(HashMap::new())),
             twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
             login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
             tls_config: tls_config.clone(),
@@ -924,25 +968,187 @@ async fn register(
     }
 }
 
+// Password change init - Step 1: Start SRP verification of old password
 #[derive(Deserialize)]
-struct ChangePasswordRequest {
-    new_salt: String,
-    new_verifier: String,
-    old_password_hash: String, // For 2FA re-encryption
-    new_password_hash: String, // For 2FA re-encryption
+struct ChangePasswordInitRequest {
+    // Empty - we use the session to identify the user
 }
 
-async fn change_password(
+#[derive(Serialize)]
+struct ChangePasswordInitResponse {
+    salt: String,
+    b_pub: String,
+    session_id: String,
+}
+
+async fn change_password_init(
     headers: HeaderMap,
     State(state): State<AppState>,
-    Json(req): Json<ChangePasswordRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+    Json(_req): Json<ChangePasswordInitRequest>,
+) -> Result<Json<ChangePasswordInitResponse>, StatusCode> {
+    // Verify the user has a valid session
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
     if auth_state.is_admin {
         return Err(StatusCode::FORBIDDEN);
     }
+    
+    // Get user's SRP salt and verifier from database
+    let row = sqlx::query("SELECT srp_salt, srp_verifier FROM users WHERE id = $1")
+        .bind(auth_state.user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let salt_hex: String = row.get("srp_salt");
+    let verifier_hex: String = row.get("srp_verifier");
+    
+    let salt = hex::decode(&salt_hex).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let verifier = hex::decode(&verifier_hex).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Generate server's ephemeral values
+    let server_eph = srp::srp_begin_authentication(&auth_state.username, &salt, &verifier)
+        .map_err(|e| {
+            log::error!("SRP begin failed for password change: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    // Store ephemeral data temporarily
+    let temp_session_id = uuid::Uuid::new_v4().to_string();
+    state.pending_password_change.write().await.insert(temp_session_id.clone(), PendingSrpAuth {
+        username: auth_state.username.clone(),
+        b_priv: server_eph.b_priv,
+        b_pub: server_eph.b_pub.clone(),
+        verifier,
+        salt: salt.clone(),
+        created_at: std::time::SystemTime::now(),
+    });
+    
+    Ok(Json(ChangePasswordInitResponse {
+        salt: salt_hex,
+        b_pub: hex::encode(server_eph.b_pub),
+        session_id: temp_session_id,
+    }))
+}
+
+// Password change verify - Step 2: Verify old password and change to new
+#[derive(Deserialize)]
+struct ChangePasswordVerifyRequest {
+    session_id: String,
+    a_pub: String,
+    m1: String,
+    new_salt: String,
+    new_verifier: String,
+    old_password_hash: String, // For 2FA re-encryption
+    new_password_hash: String, // For 2FA re-encryption
+}
+
+#[derive(Serialize)]
+struct ChangePasswordVerifyResponse {
+    success: bool,
+    m2: Option<String>,
+    message: Option<String>,
+}
+
+async fn change_password_verify(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<ChangePasswordVerifyRequest>,
+) -> Result<Json<ChangePasswordVerifyResponse>, StatusCode> {
+    // Verify the user still has a valid session
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Get pending SRP auth for password change
+    let pending = {
+        let map = state.pending_password_change.read().await;
+        map.get(&req.session_id).cloned()
+    };
+    
+    let pending = match pending {
+        Some(p) => p,
+        None => {
+            return Ok(Json(ChangePasswordVerifyResponse {
+                success: false,
+                m2: None,
+                message: Some("Invalid or expired session".to_string()),
+            }));
+        }
+    };
+    
+    // Check expiration (5 minutes)
+    if pending.created_at.elapsed().unwrap_or_default() > std::time::Duration::from_secs(300) {
+        state.pending_password_change.write().await.remove(&req.session_id);
+        return Ok(Json(ChangePasswordVerifyResponse {
+            success: false,
+            m2: None,
+            message: Some("Session expired".to_string()),
+        }));
+    }
+    
+    // Verify username matches (security check)
+    if pending.username != auth_state.username {
+        state.pending_password_change.write().await.remove(&req.session_id);
+        return Ok(Json(ChangePasswordVerifyResponse {
+            success: false,
+            m2: None,
+            message: Some("Invalid session".to_string()),
+        }));
+    }
+    
+    // Decode client's public ephemeral and M1
+    let a_pub = match hex::decode(&req.a_pub) {
+        Ok(a) => a,
+        Err(_) => {
+            state.pending_password_change.write().await.remove(&req.session_id);
+            return Ok(Json(ChangePasswordVerifyResponse {
+                success: false,
+                m2: None,
+                message: Some("Invalid credentials".to_string()),
+            }));
+        }
+    };
+    
+    let m1 = match hex::decode(&req.m1) {
+        Ok(m) => m,
+        Err(_) => {
+            state.pending_password_change.write().await.remove(&req.session_id);
+            return Ok(Json(ChangePasswordVerifyResponse {
+                success: false,
+                m2: None,
+                message: Some("Invalid credentials".to_string()),
+            }));
+        }
+    };
+    
+    // Verify SRP - this proves the user knows the old password
+    let m2 = match srp::srp_verify_session(
+        &pending.username,
+        &pending.salt,
+        &pending.verifier,
+        &a_pub,
+        &pending.b_priv,
+        &m1,
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            log::debug!("SRP verification failed during password change: {}", e);
+            state.pending_password_change.write().await.remove(&req.session_id);
+            return Ok(Json(ChangePasswordVerifyResponse {
+                success: false,
+                m2: None,
+                message: Some("Invalid old password".to_string()),
+            }));
+        }
+    };
+    
+    // Old password verified! Clean up pending SRP
+    state.pending_password_change.write().await.remove(&req.session_id);
     
     // Get 2FA status
     let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted FROM users WHERE id = $1")
@@ -959,18 +1165,30 @@ async fn change_password(
         let old_encrypted = totp_secret_encrypted.unwrap();
         
         // Decrypt with old password hash
-        let totp_secret = crypto::decrypt_totp_secret(&old_encrypted, &req.old_password_hash)
-            .map_err(|e| {
+        let totp_secret = match crypto::decrypt_totp_secret(&old_encrypted, &req.old_password_hash) {
+            Ok(secret) => secret,
+            Err(e) => {
                 log::error!("Failed to decrypt TOTP secret during password change: {}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+                return Ok(Json(ChangePasswordVerifyResponse {
+                    success: false,
+                    m2: Some(hex::encode(&m2)),
+                    message: Some("Failed to re-encrypt 2FA secret. Invalid old password hash.".to_string()),
+                }));
+            }
+        };
         
         // Re-encrypt with new password hash
-        let new_encrypted = crypto::encrypt_totp_secret(&totp_secret, &req.new_password_hash, &auth_state.user_id.to_string())
-            .map_err(|e| {
+        let new_encrypted = match crypto::encrypt_totp_secret(&totp_secret, &req.new_password_hash, &auth_state.user_id.to_string()) {
+            Ok(encrypted) => encrypted,
+            Err(e) => {
                 log::error!("Failed to re-encrypt TOTP secret during password change: {}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
+                return Ok(Json(ChangePasswordVerifyResponse {
+                    success: false,
+                    m2: Some(hex::encode(&m2)),
+                    message: Some("Failed to re-encrypt 2FA secret with new password.".to_string()),
+                }));
+            }
+        };
         
         Some(new_encrypted)
     } else {
@@ -997,21 +1215,192 @@ async fn change_password(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
     
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(Json(ChangePasswordVerifyResponse {
+        success: true,
+        m2: Some(hex::encode(m2)),
+        message: None,
+    }))
 }
 
-// Admin password change endpoint (same logic but for admin users)
-async fn change_admin_password(
+// Admin password change init - Step 1: Start SRP verification of old password
+#[derive(Deserialize)]
+struct ChangeAdminPasswordInitRequest {
+    // Empty - we use the session to identify the user
+}
+
+#[derive(Serialize)]
+struct ChangeAdminPasswordInitResponse {
+    salt: String,
+    b_pub: String,
+    session_id: String,
+}
+
+async fn change_admin_password_init(
     headers: HeaderMap,
     State(state): State<AppState>,
-    Json(req): Json<ChangePasswordRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+    Json(_req): Json<ChangeAdminPasswordInitRequest>,
+) -> Result<Json<ChangeAdminPasswordInitResponse>, StatusCode> {
+    // Verify the user has a valid session
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
     if !auth_state.is_admin {
         return Err(StatusCode::FORBIDDEN);
     }
+    
+    // Get user's SRP salt and verifier from database
+    let row = sqlx::query("SELECT srp_salt, srp_verifier FROM users WHERE id = $1")
+        .bind(auth_state.user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    let salt_hex: String = row.get("srp_salt");
+    let verifier_hex: String = row.get("srp_verifier");
+    
+    let salt = hex::decode(&salt_hex).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let verifier = hex::decode(&verifier_hex).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Generate server's ephemeral values
+    let server_eph = srp::srp_begin_authentication(&auth_state.username, &salt, &verifier)
+        .map_err(|e| {
+            log::error!("SRP begin failed for admin password change: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    
+    // Store ephemeral data temporarily
+    let temp_session_id = uuid::Uuid::new_v4().to_string();
+    state.pending_admin_password_change.write().await.insert(temp_session_id.clone(), PendingSrpAuth {
+        username: auth_state.username.clone(),
+        b_priv: server_eph.b_priv,
+        b_pub: server_eph.b_pub.clone(),
+        verifier,
+        salt: salt.clone(),
+        created_at: std::time::SystemTime::now(),
+    });
+    
+    Ok(Json(ChangeAdminPasswordInitResponse {
+        salt: salt_hex,
+        b_pub: hex::encode(server_eph.b_pub),
+        session_id: temp_session_id,
+    }))
+}
+
+// Admin password change verify - Step 2: Verify old password and change to new
+#[derive(Deserialize)]
+struct ChangeAdminPasswordVerifyRequest {
+    session_id: String,
+    a_pub: String,
+    m1: String,
+    new_salt: String,
+    new_verifier: String,
+}
+
+#[derive(Serialize)]
+struct ChangeAdminPasswordVerifyResponse {
+    success: bool,
+    m2: Option<String>,
+    message: Option<String>,
+}
+
+async fn change_admin_password_verify(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<ChangeAdminPasswordVerifyRequest>,
+) -> Result<Json<ChangeAdminPasswordVerifyResponse>, StatusCode> {
+    // Verify the user still has a valid session
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    if !auth_state.is_admin {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
+    // Get pending SRP auth for admin password change
+    let pending = {
+        let map = state.pending_admin_password_change.read().await;
+        map.get(&req.session_id).cloned()
+    };
+    
+    let pending = match pending {
+        Some(p) => p,
+        None => {
+            return Ok(Json(ChangeAdminPasswordVerifyResponse {
+                success: false,
+                m2: None,
+                message: Some("Invalid or expired session".to_string()),
+            }));
+        }
+    };
+    
+    // Check expiration (5 minutes)
+    if pending.created_at.elapsed().unwrap_or_default() > std::time::Duration::from_secs(300) {
+        state.pending_admin_password_change.write().await.remove(&req.session_id);
+        return Ok(Json(ChangeAdminPasswordVerifyResponse {
+            success: false,
+            m2: None,
+            message: Some("Session expired".to_string()),
+        }));
+    }
+    
+    // Verify username matches (security check)
+    if pending.username != auth_state.username {
+        state.pending_admin_password_change.write().await.remove(&req.session_id);
+        return Ok(Json(ChangeAdminPasswordVerifyResponse {
+            success: false,
+            m2: None,
+            message: Some("Invalid session".to_string()),
+        }));
+    }
+    
+    // Decode client's public ephemeral and M1
+    let a_pub = match hex::decode(&req.a_pub) {
+        Ok(a) => a,
+        Err(_) => {
+            state.pending_admin_password_change.write().await.remove(&req.session_id);
+            return Ok(Json(ChangeAdminPasswordVerifyResponse {
+                success: false,
+                m2: None,
+                message: Some("Invalid credentials".to_string()),
+            }));
+        }
+    };
+    
+    let m1 = match hex::decode(&req.m1) {
+        Ok(m) => m,
+        Err(_) => {
+            state.pending_admin_password_change.write().await.remove(&req.session_id);
+            return Ok(Json(ChangeAdminPasswordVerifyResponse {
+                success: false,
+                m2: None,
+                message: Some("Invalid credentials".to_string()),
+            }));
+        }
+    };
+    
+    // Verify SRP - this proves the user knows the old password
+    let m2 = match srp::srp_verify_session(
+        &pending.username,
+        &pending.salt,
+        &pending.verifier,
+        &a_pub,
+        &pending.b_priv,
+        &m1,
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            log::debug!("SRP verification failed during admin password change: {}", e);
+            state.pending_admin_password_change.write().await.remove(&req.session_id);
+            return Ok(Json(ChangeAdminPasswordVerifyResponse {
+                success: false,
+                m2: None,
+                message: Some("Invalid old password".to_string()),
+            }));
+        }
+    };
+    
+    // Old password verified! Clean up pending SRP
+    state.pending_admin_password_change.write().await.remove(&req.session_id);
     
     // Admin users don't have 2FA, so just update SRP credentials
     sqlx::query("UPDATE users SET srp_salt = $1, srp_verifier = $2 WHERE id = $3")
@@ -1027,7 +1416,11 @@ async fn change_admin_password(
         session_data.user_id != auth_state.user_id
     });
     
-    Ok(Json(serde_json::json!({"success": true})))
+    Ok(Json(ChangeAdminPasswordVerifyResponse {
+        success: true,
+        m2: Some(hex::encode(m2)),
+        message: None,
+    }))
 }
 
 async fn list_users(
