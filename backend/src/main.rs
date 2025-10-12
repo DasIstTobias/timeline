@@ -237,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Configure CORS based on domain configuration
     let cors = {
         let config = tls_config.read().await;
-        tls::create_cors_layer(&config.domains)
+        tls::create_cors_layer(&config.domains, config.http_port, config.https_port)
     };
     
     // Create base router (will be used for both HTTP and HTTPS)
@@ -394,7 +394,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         
         // Start HTTPS server (this blocks)
-        tls::start_https_server(https_app).await?;
+        let https_port = tls_config.read().await.https_port;
+        tls::start_https_server(https_app, https_port).await?;
     } else {
         // Only start HTTP server (traditional mode)
         let app_state = AppState::new(AppData {
@@ -412,8 +413,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         let app = base_router.layer(cors).with_state(app_state);
         
-        log::info!("Timeline server starting on port 8080 (HTTP only)");
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+        let http_port = tls_config.read().await.http_port;
+        log::info!("Timeline server starting on port {} (HTTP only)", http_port);
+        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", http_port)).await?;
         axum::serve(listener, app).await?;
     }
     
