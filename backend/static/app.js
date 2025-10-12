@@ -1846,6 +1846,19 @@ class TimelineApp {
         doc.setFont('helvetica');
         doc.setTextColor(0, 0, 0); // Black text
         
+        // Convert accent color from hex to RGB
+        const hexToRgb = (hex) => {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : { r: 113, g: 1, b: 147 }; // Default color if parsing fails
+        };
+        
+        const accentColor = this.settings.accentColor || '#710193';
+        const rgb = hexToRgb(accentColor);
+        
         // Helper function to add page numbers
         const addPageNumber = (pageNum) => {
             const pageWidth = doc.internal.pageSize.width;
@@ -1894,12 +1907,12 @@ class TimelineApp {
             }
             
             // Draw timeline line (vertical line on the left)
-            doc.setDrawColor(113, 1, 147); // Accent color in grayscale equivalent
+            doc.setDrawColor(rgb.r, rgb.g, rgb.b);
             doc.setLineWidth(2);
             doc.line(15, yPosition - 5, 15, yPosition + 25);
             
             // Draw timeline dot
-            doc.setFillColor(113, 1, 147);
+            doc.setFillColor(rgb.r, rgb.g, rgb.b);
             doc.circle(15, yPosition + 5, 2, 'F');
             
             // Event title
