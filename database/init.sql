@@ -12,6 +12,7 @@ CREATE TABLE users (
     profile_picture_encrypted TEXT,
     is_admin BOOLEAN DEFAULT FALSE,
     totp_secret_encrypted TEXT,
+    totp_encryption_key_encrypted TEXT,  -- Random key encrypted with password hash
     totp_enabled BOOLEAN DEFAULT FALSE,
     totp_enabled_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()

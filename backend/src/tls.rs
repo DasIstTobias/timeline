@@ -154,7 +154,37 @@ pub fn check_tls_requirement(
     Err(StatusCode::FORBIDDEN)
 }
 
+/// Check if IP address is loopback
+fn is_loopback_address(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ipv4) => ipv4.is_loopback(),
+        std::net::IpAddr::V6(ipv6) => ipv6.is_loopback(),
+    }
+}
+
+/// Check if IP address is link-local, unique local, or other non-routable
+fn is_non_routable_address(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ipv4) => {
+            ipv4.is_private() || ipv4.is_loopback() || ipv4.is_link_local() || ipv4.is_unspecified()
+        }
+        std::net::IpAddr::V6(ipv6) => {
+            ipv6.is_loopback() || 
+            ipv6.is_unicast_link_local() ||
+            is_ipv6_unique_local(ipv6) ||
+            ipv6.is_unspecified()
+        }
+    }
+}
+
+/// Check if IPv6 is unique local (fc00::/7)
+fn is_ipv6_unique_local(ipv6: &std::net::Ipv6Addr) -> bool {
+    let bytes = ipv6.octets();
+    (bytes[0] & 0xfe) == 0xfc
+}
+
 /// Check if domain is allowed based on Host header
+/// Enhanced with additional validation to prevent bypass attacks
 pub fn check_domain_allowed(headers: &HeaderMap, allowed_domains: &[String]) -> Result<(), StatusCode> {
     // Try multiple headers to find the host information
     // HTTP/1.1 uses "host", HTTP/2 uses ":authority" pseudo-header
@@ -193,6 +223,14 @@ pub fn check_domain_allowed(headers: &HeaderMap, allowed_domains: &[String]) -> 
     };
     
     log::info!("Extracted hostname: '{}'", hostname);
+    
+    // Additional security: Block IPv6 link-local and unique local addresses
+    if let Ok(ip) = hostname.parse::<std::net::IpAddr>() {
+        if is_non_routable_address(&ip) && !is_loopback_address(&ip) {
+            log::warn!("Blocking non-routable IP address: {}", hostname);
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
     
     // Check if hostname matches any allowed domain (case-insensitive for domain names)
     let hostname_lower = hostname.to_lowercase();

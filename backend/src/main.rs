@@ -49,6 +49,29 @@ fn validate_input_string(input: &str, max_length: Option<usize>) -> Result<(), S
     Ok(())
 }
 
+// Security audit logging for important events
+fn audit_log(event_type: &str, username: Option<&str>, user_id: Option<Uuid>, details: &str, success: bool) {
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let user_info = if let Some(uname) = username {
+        format!("user:{}", uname)
+    } else if let Some(uid) = user_id {
+        format!("user_id:{}", uid)
+    } else {
+        "anonymous".to_string()
+    };
+    
+    let status = if success { "SUCCESS" } else { "FAILURE" };
+    
+    log::info!(
+        "[AUDIT] {} | {} | {} | {} | {}",
+        timestamp,
+        event_type,
+        user_info,
+        status,
+        details
+    );
+}
+
 type AppState = Arc<AppData>;
 
 #[derive(Clone)]
@@ -63,13 +86,23 @@ struct AppData {
     pending_admin_password_change: Arc<RwLock<HashMap<String, PendingSrpAuth>>>, // temp_session_id -> SRP auth for admin password change
     twofa_protection: Arc<TwoFABruteForceProtection>,
     login_rate_limiter: Arc<RwLock<HashMap<String, LoginRateLimit>>>, // IP -> rate limit data
+    username_rate_limiter: Arc<RwLock<HashMap<String, UsernameRateLimit>>>, // username -> rate limit data
     tls_config: Arc<RwLock<TlsConfig>>,
     is_https_port: bool, // Track which port this instance is running on
+    password_change_locks: Arc<RwLock<HashMap<Uuid, std::time::SystemTime>>>, // user_id -> lock timestamp for preventing concurrent password changes
 }
 
-// Rate limiting for login attempts
+// Rate limiting for login attempts by IP
 #[derive(Clone)]
 struct LoginRateLimit {
+    attempts: u32,
+    last_attempt: std::time::SystemTime,
+    locked_until: Option<std::time::SystemTime>,
+}
+
+// Rate limiting for login attempts by username
+#[derive(Clone)]
+struct UsernameRateLimit {
     attempts: u32,
     last_attempt: std::time::SystemTime,
     locked_until: Option<std::time::SystemTime>,
@@ -296,14 +329,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_admin_password_change: Arc::new(RwLock::new(HashMap::new())),
             twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
             login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+            username_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+            password_change_locks: Arc::new(RwLock::new(HashMap::new())),
             tls_config: tls_config.clone(),
             is_https_port: false,
         });
         
-        // Create HTTPS app state (shares same sessions/data)
+        // Create HTTPS app state (SEPARATE session store for security, shares other data)
         let https_app_state = AppState::new(AppData {
             db: db.clone(),
-            sessions: http_app_state.sessions.clone(),
+            sessions: Arc::new(RwLock::new(HashMap::new())), // SEPARATE session store for HTTPS
             pending_2fa: http_app_state.pending_2fa.clone(),
             pending_2fa_secrets: http_app_state.pending_2fa_secrets.clone(),
             pending_srp: http_app_state.pending_srp.clone(),
@@ -312,12 +347,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_admin_password_change: http_app_state.pending_admin_password_change.clone(),
             twofa_protection: http_app_state.twofa_protection.clone(),
             login_rate_limiter: http_app_state.login_rate_limiter.clone(),
+            username_rate_limiter: http_app_state.username_rate_limiter.clone(),
+            password_change_locks: http_app_state.password_change_locks.clone(),
             tls_config: tls_config.clone(),
             is_https_port: true,
         });
         
-        // Start cleanup tasks with HTTP app state
-        let sessions_for_cleanup = http_app_state.sessions.clone();
+        // Start cleanup tasks with both HTTP and HTTPS app states
+        let http_sessions_for_cleanup = http_app_state.sessions.clone();
+        let https_sessions_for_cleanup = https_app_state.sessions.clone();
         let pending_2fa_cleanup = http_app_state.pending_2fa.clone();
         let pending_secrets_cleanup = http_app_state.pending_2fa_secrets.clone();
         let pending_srp_cleanup = http_app_state.pending_srp.clone();
@@ -325,11 +363,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let pending_password_change_cleanup = http_app_state.pending_password_change.clone();
         let pending_admin_password_change_cleanup = http_app_state.pending_admin_password_change.clone();
         
+        // Cleanup HTTP sessions
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-                auth::cleanup_expired_sessions(&sessions_for_cleanup).await;
-                log::info!("Cleaned up expired sessions");
+                auth::cleanup_expired_sessions(&http_sessions_for_cleanup).await;
+                log::info!("Cleaned up expired HTTP sessions");
+            }
+        });
+        
+        // Cleanup HTTPS sessions separately
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                auth::cleanup_expired_sessions(&https_sessions_for_cleanup).await;
+                log::info!("Cleaned up expired HTTPS sessions");
             }
         });
         
@@ -451,6 +499,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_admin_password_change: Arc::new(RwLock::new(HashMap::new())),
             twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
             login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+            username_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+            password_change_locks: Arc::new(RwLock::new(HashMap::new())),
             tls_config: tls_config.clone(),
             is_https_port: false,
         });
@@ -566,6 +616,66 @@ async fn reset_login_rate_limit(
 ) {
     let mut limiter = rate_limiter.write().await;
     limiter.remove(ip);
+}
+
+// Check username-based rate limiting (more aggressive than IP-based)
+async fn check_username_rate_limit(
+    username: &str,
+    rate_limiter: &Arc<RwLock<HashMap<String, UsernameRateLimit>>>,
+) -> Result<(), String> {
+    let now = std::time::SystemTime::now();
+    let mut limiter = rate_limiter.write().await;
+    
+    let rate_limit = limiter.entry(username.to_string()).or_insert(UsernameRateLimit {
+        attempts: 0,
+        last_attempt: now,
+        locked_until: None,
+    });
+    
+    // Check if currently locked
+    if let Some(locked_until) = rate_limit.locked_until {
+        if now < locked_until {
+            let remaining = locked_until.duration_since(now).unwrap_or_default().as_secs();
+            return Err(format!("Account temporarily locked due to too many failed attempts. Try again in {} seconds", remaining));
+        } else {
+            // Lock expired, reset
+            rate_limit.attempts = 0;
+            rate_limit.locked_until = None;
+        }
+    }
+    
+    // Check if we should reset the counter (more than 30 minutes since last attempt)
+    if let Ok(duration) = now.duration_since(rate_limit.last_attempt) {
+        if duration.as_secs() > 1800 {
+            rate_limit.attempts = 0;
+        }
+    }
+    
+    // Increment attempts
+    rate_limit.attempts += 1;
+    rate_limit.last_attempt = now;
+    
+    // Apply more aggressive lockout for targeted attacks on specific accounts
+    if rate_limit.attempts >= 5 {
+        // 5+ attempts = 30 minutes lockout
+        rate_limit.locked_until = Some(now + std::time::Duration::from_secs(1800));
+        return Err("Too many failed login attempts for this account. Locked for 30 minutes".to_string());
+    } else if rate_limit.attempts >= 3 {
+        // 3-4 attempts = 5 minutes lockout
+        rate_limit.locked_until = Some(now + std::time::Duration::from_secs(300));
+        return Err("Too many failed login attempts for this account. Locked for 5 minutes".to_string());
+    }
+    
+    Ok(())
+}
+
+// Reset username rate limit on successful login
+async fn reset_username_rate_limit(
+    username: &str,
+    rate_limiter: &Arc<RwLock<HashMap<String, UsernameRateLimit>>>,
+) {
+    let mut limiter = rate_limiter.write().await;
+    limiter.remove(username);
 }
 
 async fn serve_index(headers: HeaderMap, State(state): State<AppState>) -> Response {
@@ -724,19 +834,7 @@ async fn login_verify(
     // Get client IP for rate limiting
     let client_ip = get_client_ip(&headers);
     
-    // Check rate limiting
-    if let Err(msg) = check_login_rate_limit(&client_ip, &state.login_rate_limiter).await {
-        return Ok((HeaderMap::new(), Json(LoginVerifyResponse {
-            success: false,
-            m2: None,
-            user_type: None,
-            requires_2fa: None,
-            temp_2fa_session_id: None,
-            message: Some(msg),
-        })));
-    }
-    
-    // Get pending SRP auth
+    // Get pending SRP auth first to get username
     let pending = {
         let map = state.pending_srp.read().await;
         map.get(&req.session_id).cloned()
@@ -755,6 +853,30 @@ async fn login_verify(
             })));
         }
     };
+    
+    // Check IP-based rate limiting
+    if let Err(msg) = check_login_rate_limit(&client_ip, &state.login_rate_limiter).await {
+        return Ok((HeaderMap::new(), Json(LoginVerifyResponse {
+            success: false,
+            m2: None,
+            user_type: None,
+            requires_2fa: None,
+            temp_2fa_session_id: None,
+            message: Some(msg),
+        })));
+    }
+    
+    // Check username-based rate limiting (more aggressive)
+    if let Err(msg) = check_username_rate_limit(&pending.username, &state.username_rate_limiter).await {
+        return Ok((HeaderMap::new(), Json(LoginVerifyResponse {
+            success: false,
+            m2: None,
+            user_type: None,
+            requires_2fa: None,
+            temp_2fa_session_id: None,
+            message: Some(msg),
+        })));
+    }
     
     // Check expiration (5 minutes)
     if pending.created_at.elapsed().unwrap_or_default() > std::time::Duration::from_secs(300) {
@@ -851,8 +973,12 @@ async fn login_verify(
     // No 2FA required - create full session
     let session_id = create_session(user_id, &state.sessions).await;
     
-    // Reset rate limit on successful login
+    // Reset rate limits on successful login
     reset_login_rate_limit(&client_ip, &state.login_rate_limiter).await;
+    reset_username_rate_limit(&pending.username, &state.username_rate_limiter).await;
+    
+    // Audit log successful login
+    audit_log("LOGIN", Some(&pending.username), Some(user_id), &format!("IP: {}", client_ip), true);
     
     let mut response_headers = HeaderMap::new();
     let cookie_value = if req.remember_me.unwrap_or(false) {
@@ -877,8 +1003,11 @@ async fn logout(
     State(state): State<AppState>,
 ) -> Result<(HeaderMap, Json<serde_json::Value>), StatusCode> {
     // Verify session exists before logout
-    let _auth_state = verify_session(&headers, &state.sessions, &state.db).await
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    // Audit log logout
+    audit_log("LOGOUT", Some(&auth_state.username), Some(auth_state.user_id), "", true);
     
     if let Some(session_id) = auth::extract_session_id(&headers) {
         state.sessions.write().await.remove(&session_id);
@@ -1064,6 +1193,29 @@ async fn change_password_verify(
         return Err(StatusCode::FORBIDDEN);
     }
     
+    // Acquire password change lock to prevent concurrent password changes (RACE CONDITION FIX)
+    {
+        let mut locks = state.password_change_locks.write().await;
+        let now = std::time::SystemTime::now();
+        
+        // Check if there's an active lock for this user
+        if let Some(&lock_time) = locks.get(&auth_state.user_id) {
+            // If lock is less than 30 seconds old, reject the request
+            if let Ok(elapsed) = now.duration_since(lock_time) {
+                if elapsed.as_secs() < 30 {
+                    return Ok(Json(ChangePasswordVerifyResponse {
+                        success: false,
+                        m2: None,
+                        message: Some("Password change already in progress. Please wait.".to_string()),
+                    }));
+                }
+            }
+        }
+        
+        // Acquire lock for this user
+        locks.insert(auth_state.user_id, now);
+    }
+    
     // Get pending SRP auth for password change
     let pending = {
         let map = state.pending_password_change.read().await;
@@ -1073,6 +1225,8 @@ async fn change_password_verify(
     let pending = match pending {
         Some(p) => p,
         None => {
+            // Release lock on error
+            state.password_change_locks.write().await.remove(&auth_state.user_id);
             return Ok(Json(ChangePasswordVerifyResponse {
                 success: false,
                 m2: None,
@@ -1083,6 +1237,7 @@ async fn change_password_verify(
     
     // Check expiration (5 minutes)
     if pending.created_at.elapsed().unwrap_or_default() > std::time::Duration::from_secs(300) {
+        state.password_change_locks.write().await.remove(&auth_state.user_id);
         state.pending_password_change.write().await.remove(&req.session_id);
         return Ok(Json(ChangePasswordVerifyResponse {
             success: false,
@@ -1093,6 +1248,7 @@ async fn change_password_verify(
     
     // Verify username matches (security check)
     if pending.username != auth_state.username {
+        state.password_change_locks.write().await.remove(&auth_state.user_id);
         state.pending_password_change.write().await.remove(&req.session_id);
         return Ok(Json(ChangePasswordVerifyResponse {
             success: false,
@@ -1105,6 +1261,7 @@ async fn change_password_verify(
     let a_pub = match hex::decode(&req.a_pub) {
         Ok(a) => a,
         Err(_) => {
+            state.password_change_locks.write().await.remove(&auth_state.user_id);
             state.pending_password_change.write().await.remove(&req.session_id);
             return Ok(Json(ChangePasswordVerifyResponse {
                 success: false,
@@ -1117,6 +1274,7 @@ async fn change_password_verify(
     let m1 = match hex::decode(&req.m1) {
         Ok(m) => m,
         Err(_) => {
+            state.password_change_locks.write().await.remove(&auth_state.user_id);
             state.pending_password_change.write().await.remove(&req.session_id);
             return Ok(Json(ChangePasswordVerifyResponse {
                 success: false,
@@ -1138,6 +1296,7 @@ async fn change_password_verify(
         Ok(m) => m,
         Err(e) => {
             log::debug!("SRP verification failed during password change: {}", e);
+            state.password_change_locks.write().await.remove(&auth_state.user_id);
             state.pending_password_change.write().await.remove(&req.session_id);
             return Ok(Json(ChangePasswordVerifyResponse {
                 success: false,
@@ -1151,60 +1310,59 @@ async fn change_password_verify(
     state.pending_password_change.write().await.remove(&req.session_id);
     
     // Get 2FA status
-    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted FROM users WHERE id = $1")
+    let row = sqlx::query("SELECT totp_enabled, totp_encryption_key_encrypted FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     let totp_enabled: bool = row.get("totp_enabled");
-    let totp_secret_encrypted: Option<String> = row.get("totp_secret_encrypted");
+    let totp_encryption_key_encrypted: Option<String> = row.get("totp_encryption_key_encrypted");
     
-    // If 2FA is enabled, re-encrypt the TOTP secret with new password hash
-    let new_totp_secret_encrypted = if totp_enabled && totp_secret_encrypted.is_some() {
-        let old_encrypted = totp_secret_encrypted.unwrap();
+    // If 2FA is enabled, re-wrap the encryption key with new password hash
+    let new_wrapped_key = if totp_enabled && totp_encryption_key_encrypted.is_some() {
+        let old_wrapped_key = totp_encryption_key_encrypted.unwrap();
         
-        // Decrypt with old password hash
-        let totp_secret = match crypto::decrypt_totp_secret(&old_encrypted, &req.old_password_hash) {
-            Ok(secret) => secret,
+        // Unwrap with old password hash
+        let encryption_key = match crypto::decrypt_encryption_key_with_password(&old_wrapped_key, &req.old_password_hash) {
+            Ok(key) => key,
             Err(e) => {
-                log::error!("Failed to decrypt TOTP secret during password change: {}", e);
+                log::error!("Failed to unwrap encryption key during password change: {}", e);
                 return Ok(Json(ChangePasswordVerifyResponse {
                     success: false,
                     m2: Some(hex::encode(&m2)),
-                    message: Some("Failed to re-encrypt 2FA secret. Invalid old password hash.".to_string()),
+                    message: Some("Failed to re-wrap 2FA encryption key. Invalid old password hash.".to_string()),
                 }));
             }
         };
         
-        // Re-encrypt with new password hash
-        let new_encrypted = match crypto::encrypt_totp_secret(&totp_secret, &req.new_password_hash, &auth_state.user_id.to_string()) {
-            Ok(encrypted) => encrypted,
+        // Re-wrap with new password hash
+        let new_wrapped = match crypto::encrypt_encryption_key_with_password(&encryption_key, &req.new_password_hash, &auth_state.user_id.to_string()) {
+            Ok(wrapped) => wrapped,
             Err(e) => {
-                log::error!("Failed to re-encrypt TOTP secret during password change: {}", e);
+                log::error!("Failed to re-wrap encryption key during password change: {}", e);
                 return Ok(Json(ChangePasswordVerifyResponse {
                     success: false,
                     m2: Some(hex::encode(&m2)),
-                    message: Some("Failed to re-encrypt 2FA secret with new password.".to_string()),
+                    message: Some("Failed to re-wrap 2FA encryption key with new password.".to_string()),
                 }));
             }
         };
         
-        Some(new_encrypted)
+        Some(new_wrapped)
     } else {
         None
     };
     
-    // Update SRP credentials and optionally re-encrypted TOTP secret
-    if let Some(new_encrypted) = new_totp_secret_encrypted {
-        sqlx::query("UPDATE users SET srp_salt = $1, srp_verifier = $2, totp_secret_encrypted = $3 WHERE id = $4")
+    // Update SRP credentials and optionally re-wrapped encryption key
+    let db_result = if let Some(new_wrapped) = new_wrapped_key {
+        sqlx::query("UPDATE users SET srp_salt = $1, srp_verifier = $2, totp_encryption_key_encrypted = $3 WHERE id = $4")
             .bind(&req.new_salt)
             .bind(&req.new_verifier)
-            .bind(&new_encrypted)
+            .bind(&new_wrapped)
             .bind(auth_state.user_id)
             .execute(&state.db)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     } else {
         sqlx::query("UPDATE users SET srp_salt = $1, srp_verifier = $2 WHERE id = $3")
             .bind(&req.new_salt)
@@ -1212,8 +1370,16 @@ async fn change_password_verify(
             .bind(auth_state.user_id)
             .execute(&state.db)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+    };
+    
+    // Release password change lock
+    state.password_change_locks.write().await.remove(&auth_state.user_id);
+    
+    // Check database result
+    db_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Audit log successful password change
+    audit_log("PASSWORD_CHANGE", Some(&auth_state.username), Some(auth_state.user_id), "", true);
     
     Ok(Json(ChangePasswordVerifyResponse {
         success: true,
@@ -1995,16 +2161,30 @@ async fn verify_2fa_login(
         }
     }
     
-    // Get ENCRYPTED TOTP secret from database
-    let totp_secret_encrypted: Option<String> = sqlx::query_scalar(
-        "SELECT totp_secret_encrypted FROM users WHERE id = $1 AND totp_enabled = true"
-    )
+    // Get ENCRYPTED TOTP secret and wrapped key from database
+    let row = sqlx::query("SELECT totp_secret_encrypted, totp_encryption_key_encrypted FROM users WHERE id = $1 AND totp_enabled = true")
         .bind(pending.user_id)
         .fetch_optional(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    let encrypted_secret = match totp_secret_encrypted {
+    let (encrypted_secret, wrapped_key) = match row {
+        Some(r) => {
+            let secret: Option<String> = r.get("totp_secret_encrypted");
+            let key: Option<String> = r.get("totp_encryption_key_encrypted");
+            (secret, key)
+        },
+        None => {
+            state.pending_2fa.write().await.remove(&req.temp_session_id);
+            return Ok((HeaderMap::new(), Json(LoginResponse {
+                success: false,
+                user_type: None,
+                message: Some("2FA not properly configured".to_string()),
+            })));
+        }
+    };
+    
+    let encrypted_secret = match encrypted_secret {
         Some(s) => s,
         None => {
             state.pending_2fa.write().await.remove(&req.temp_session_id);
@@ -2016,8 +2196,34 @@ async fn verify_2fa_login(
         }
     };
     
-    // Decrypt TOTP secret using user's password hash
-    let secret = match crypto::decrypt_totp_secret(&encrypted_secret, &pending.password_hash) {
+    let wrapped_key = match wrapped_key {
+        Some(k) => k,
+        None => {
+            state.pending_2fa.write().await.remove(&req.temp_session_id);
+            return Ok((HeaderMap::new(), Json(LoginResponse {
+                success: false,
+                user_type: None,
+                message: Some("2FA not properly configured".to_string()),
+            })));
+        }
+    };
+    
+    // Unwrap the encryption key with password hash
+    let encryption_key = match crypto::decrypt_encryption_key_with_password(&wrapped_key, &pending.password_hash) {
+        Ok(k) => k,
+        Err(e) => {
+            log::error!("Failed to unwrap encryption key: {}", e);
+            state.pending_2fa.write().await.remove(&req.temp_session_id);
+            return Ok((HeaderMap::new(), Json(LoginResponse {
+                success: false,
+                user_type: None,
+                message: Some("Failed to verify 2FA. Incorrect password.".to_string()),
+            })));
+        }
+    };
+    
+    // Decrypt TOTP secret using unwrapped encryption key
+    let secret = match crypto::decrypt_totp_secret_secure(&encrypted_secret, &encryption_key) {
         Ok(s) => s,
         Err(e) => {
             log::error!("Failed to decrypt TOTP secret: {}", e);
@@ -2054,8 +2260,19 @@ async fn verify_2fa_login(
     state.pending_2fa.write().await.remove(&req.temp_session_id);
     let session_id = create_session(pending.user_id, &state.sessions).await;
     
-    // Reset login rate limit on successful 2FA verification
+    // Get username to reset username rate limit
+    let username: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
+        .bind(pending.user_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    
+    // Reset login rate limits on successful 2FA verification
     reset_login_rate_limit(&client_ip, &state.login_rate_limiter).await;
+    if let Some(uname) = username {
+        reset_username_rate_limit(&uname, &state.username_rate_limiter).await;
+    }
     
     let mut response_headers = HeaderMap::new();
     let cookie_value = if pending.remember_me {
@@ -2462,28 +2679,60 @@ async fn enable_2fa(
         }));
     }
     
-    // Encrypt TOTP secret with user's password hash before storing
-    let user_id_str = auth_state.user_id.to_string();
-    let encrypted_secret = crypto::encrypt_totp_secret(&pending.secret, &req.password_hash, &user_id_str)
+    // SECURITY FIX: Generate random encryption key for TOTP secret (zero-knowledge)
+    let totp_encryption_key = crypto::generate_totp_encryption_key();
+    
+    // Encrypt TOTP secret with random key (NOT password-derived)
+    let encrypted_secret = crypto::encrypt_totp_secret_secure(&pending.secret, &totp_encryption_key)
         .map_err(|e| {
             log::error!("Failed to encrypt TOTP secret: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     
-    // CRITICAL SECURITY FIX: Test that we can decrypt with the provided password hash
+    // Wrap the encryption key with password hash so we can store it
+    let user_id_str = auth_state.user_id.to_string();
+    let wrapped_key = crypto::encrypt_encryption_key_with_password(
+        &totp_encryption_key,
+        &req.password_hash,
+        &user_id_str
+    ).map_err(|e| {
+        log::error!("Failed to wrap encryption key: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    
+    // CRITICAL SECURITY FIX: Test that we can unwrap and decrypt
     // This ensures the password hash is valid and the user won't be locked out
-    match crypto::decrypt_totp_secret(&encrypted_secret, &req.password_hash) {
-        Ok(decrypted) => {
-            if decrypted != pending.secret {
-                log::error!("Encryption/decryption test failed: secrets don't match");
+    match crypto::decrypt_encryption_key_with_password(&wrapped_key, &req.password_hash) {
+        Ok(unwrapped_key) => {
+            if unwrapped_key != totp_encryption_key {
+                log::error!("Key wrapping test failed: keys don't match");
                 return Ok(Json(Enable2FAResponse {
                     success: false,
                     message: Some("Encryption verification failed. Please try again.".to_string()),
                 }));
             }
+            // Also verify we can decrypt the TOTP secret
+            match crypto::decrypt_totp_secret_secure(&encrypted_secret, &unwrapped_key) {
+                Ok(decrypted) => {
+                    if decrypted != pending.secret {
+                        log::error!("TOTP decryption test failed: secrets don't match");
+                        return Ok(Json(Enable2FAResponse {
+                            success: false,
+                            message: Some("Encryption verification failed. Please try again.".to_string()),
+                        }));
+                    }
+                },
+                Err(e) => {
+                    log::error!("TOTP decryption test failed: {}", e);
+                    return Ok(Json(Enable2FAResponse {
+                        success: false,
+                        message: Some("Encryption verification failed. Please try again.".to_string()),
+                    }));
+                }
+            }
         },
         Err(e) => {
-            log::error!("Encryption test failed: {}", e);
+            log::error!("Key unwrapping test failed: {}", e);
             return Ok(Json(Enable2FAResponse {
                 success: false,
                 message: Some("Encryption verification failed. Please try again.".to_string()),
@@ -2491,9 +2740,10 @@ async fn enable_2fa(
         }
     }
     
-    // Enable 2FA with ENCRYPTED secret
-    sqlx::query("UPDATE users SET totp_secret_encrypted = $1, totp_enabled = true, totp_enabled_at = NOW() WHERE id = $2")
+    // Enable 2FA with ENCRYPTED secret and wrapped key
+    sqlx::query("UPDATE users SET totp_secret_encrypted = $1, totp_encryption_key_encrypted = $2, totp_enabled = true, totp_enabled_at = NOW() WHERE id = $3")
         .bind(&encrypted_secret)
+        .bind(&wrapped_key)
         .bind(auth_state.user_id)
         .execute(&state.db)
         .await
@@ -2501,6 +2751,9 @@ async fn enable_2fa(
     
     // Clean up temporary storage
     state.pending_2fa_secrets.write().await.remove(&auth_state.user_id);
+    
+    // Audit log 2FA enable
+    audit_log("2FA_ENABLE", Some(&auth_state.username), Some(auth_state.user_id), "", true);
     
     Ok(Json(Enable2FAResponse {
         success: true,
@@ -2541,7 +2794,7 @@ async fn disable_2fa(
     }
     
     // Get current 2FA status and encrypted secret
-    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted FROM users WHERE id = $1")
+    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted, totp_encryption_key_encrypted FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
@@ -2549,6 +2802,7 @@ async fn disable_2fa(
     
     let totp_enabled: bool = row.get("totp_enabled");
     let totp_secret_encrypted: Option<String> = row.get("totp_secret_encrypted");
+    let totp_encryption_key_encrypted: Option<String> = row.get("totp_encryption_key_encrypted");
     
     if !totp_enabled {
         return Ok(Json(Disable2FAResponse {
@@ -2558,9 +2812,22 @@ async fn disable_2fa(
     }
     
     let encrypted_secret = totp_secret_encrypted.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let wrapped_key = totp_encryption_key_encrypted.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    // Decrypt TOTP secret to verify code
-    let secret = match crypto::decrypt_totp_secret(&encrypted_secret, &req.password_hash) {
+    // Unwrap the encryption key with password hash
+    let encryption_key = match crypto::decrypt_encryption_key_with_password(&wrapped_key, &req.password_hash) {
+        Ok(k) => k,
+        Err(e) => {
+            log::error!("Failed to unwrap encryption key: {}", e);
+            return Ok(Json(Disable2FAResponse {
+                success: false,
+                message: Some("Failed to verify 2FA. Incorrect password.".to_string()),
+            }));
+        }
+    };
+    
+    // Decrypt TOTP secret with the unwrapped encryption key
+    let secret = match crypto::decrypt_totp_secret_secure(&encrypted_secret, &encryption_key) {
         Ok(s) => s,
         Err(e) => {
             log::error!("Failed to decrypt TOTP secret: {}", e);
@@ -2579,12 +2846,15 @@ async fn disable_2fa(
         }));
     }
     
-    // Disable 2FA
-    sqlx::query("UPDATE users SET totp_secret_encrypted = NULL, totp_enabled = false, totp_enabled_at = NULL WHERE id = $1")
+    // Disable 2FA and clear encryption key
+    sqlx::query("UPDATE users SET totp_secret_encrypted = NULL, totp_encryption_key_encrypted = NULL, totp_enabled = false, totp_enabled_at = NULL WHERE id = $1")
         .bind(auth_state.user_id)
         .execute(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Audit log 2FA disable
+    audit_log("2FA_DISABLE", Some(&auth_state.username), Some(auth_state.user_id), "", true);
     
     Ok(Json(Disable2FAResponse {
         success: true,
