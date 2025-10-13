@@ -1995,16 +1995,30 @@ async fn verify_2fa_login(
         }
     }
     
-    // Get ENCRYPTED TOTP secret from database
-    let totp_secret_encrypted: Option<String> = sqlx::query_scalar(
-        "SELECT totp_secret_encrypted FROM users WHERE id = $1 AND totp_enabled = true"
-    )
+    // Get ENCRYPTED TOTP secret and wrapped key from database
+    let row = sqlx::query("SELECT totp_secret_encrypted, totp_encryption_key_encrypted FROM users WHERE id = $1 AND totp_enabled = true")
         .bind(pending.user_id)
         .fetch_optional(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    let encrypted_secret = match totp_secret_encrypted {
+    let (encrypted_secret, wrapped_key) = match row {
+        Some(r) => {
+            let secret: Option<String> = r.get("totp_secret_encrypted");
+            let key: Option<String> = r.get("totp_encryption_key_encrypted");
+            (secret, key)
+        },
+        None => {
+            state.pending_2fa.write().await.remove(&req.temp_session_id);
+            return Ok((HeaderMap::new(), Json(LoginResponse {
+                success: false,
+                user_type: None,
+                message: Some("2FA not properly configured".to_string()),
+            })));
+        }
+    };
+    
+    let encrypted_secret = match encrypted_secret {
         Some(s) => s,
         None => {
             state.pending_2fa.write().await.remove(&req.temp_session_id);
@@ -2016,8 +2030,34 @@ async fn verify_2fa_login(
         }
     };
     
-    // Decrypt TOTP secret using user's password hash
-    let secret = match crypto::decrypt_totp_secret(&encrypted_secret, &pending.password_hash) {
+    let wrapped_key = match wrapped_key {
+        Some(k) => k,
+        None => {
+            state.pending_2fa.write().await.remove(&req.temp_session_id);
+            return Ok((HeaderMap::new(), Json(LoginResponse {
+                success: false,
+                user_type: None,
+                message: Some("2FA not properly configured".to_string()),
+            })));
+        }
+    };
+    
+    // Unwrap the encryption key with password hash
+    let encryption_key = match crypto::decrypt_encryption_key_with_password(&wrapped_key, &pending.password_hash) {
+        Ok(k) => k,
+        Err(e) => {
+            log::error!("Failed to unwrap encryption key: {}", e);
+            state.pending_2fa.write().await.remove(&req.temp_session_id);
+            return Ok((HeaderMap::new(), Json(LoginResponse {
+                success: false,
+                user_type: None,
+                message: Some("Failed to verify 2FA. Incorrect password.".to_string()),
+            })));
+        }
+    };
+    
+    // Decrypt TOTP secret using unwrapped encryption key
+    let secret = match crypto::decrypt_totp_secret_secure(&encrypted_secret, &encryption_key) {
         Ok(s) => s,
         Err(e) => {
             log::error!("Failed to decrypt TOTP secret: {}", e);
