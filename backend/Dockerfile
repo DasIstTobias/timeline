@@ -10,7 +10,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY static ./static
 
-RUN cargo build --release
+# Configure git to use system certificates and build
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+RUN update-ca-certificates && cargo build --release
 
 FROM debian:trixie-slim
 
