@@ -63,13 +63,23 @@ struct AppData {
     pending_admin_password_change: Arc<RwLock<HashMap<String, PendingSrpAuth>>>, // temp_session_id -> SRP auth for admin password change
     twofa_protection: Arc<TwoFABruteForceProtection>,
     login_rate_limiter: Arc<RwLock<HashMap<String, LoginRateLimit>>>, // IP -> rate limit data
+    username_rate_limiter: Arc<RwLock<HashMap<String, UsernameRateLimit>>>, // username -> rate limit data
     tls_config: Arc<RwLock<TlsConfig>>,
     is_https_port: bool, // Track which port this instance is running on
+    password_change_locks: Arc<RwLock<HashMap<Uuid, std::time::SystemTime>>>, // user_id -> lock timestamp for preventing concurrent password changes
 }
 
-// Rate limiting for login attempts
+// Rate limiting for login attempts by IP
 #[derive(Clone)]
 struct LoginRateLimit {
+    attempts: u32,
+    last_attempt: std::time::SystemTime,
+    locked_until: Option<std::time::SystemTime>,
+}
+
+// Rate limiting for login attempts by username
+#[derive(Clone)]
+struct UsernameRateLimit {
     attempts: u32,
     last_attempt: std::time::SystemTime,
     locked_until: Option<std::time::SystemTime>,
@@ -296,6 +306,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_admin_password_change: Arc::new(RwLock::new(HashMap::new())),
             twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
             login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+            username_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+            password_change_locks: Arc::new(RwLock::new(HashMap::new())),
             tls_config: tls_config.clone(),
             is_https_port: false,
         });
@@ -312,6 +324,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_admin_password_change: http_app_state.pending_admin_password_change.clone(),
             twofa_protection: http_app_state.twofa_protection.clone(),
             login_rate_limiter: http_app_state.login_rate_limiter.clone(),
+            username_rate_limiter: http_app_state.username_rate_limiter.clone(),
+            password_change_locks: http_app_state.password_change_locks.clone(),
             tls_config: tls_config.clone(),
             is_https_port: true,
         });
@@ -451,6 +465,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pending_admin_password_change: Arc::new(RwLock::new(HashMap::new())),
             twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
             login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+            username_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+            password_change_locks: Arc::new(RwLock::new(HashMap::new())),
             tls_config: tls_config.clone(),
             is_https_port: false,
         });
@@ -566,6 +582,66 @@ async fn reset_login_rate_limit(
 ) {
     let mut limiter = rate_limiter.write().await;
     limiter.remove(ip);
+}
+
+// Check username-based rate limiting (more aggressive than IP-based)
+async fn check_username_rate_limit(
+    username: &str,
+    rate_limiter: &Arc<RwLock<HashMap<String, UsernameRateLimit>>>,
+) -> Result<(), String> {
+    let now = std::time::SystemTime::now();
+    let mut limiter = rate_limiter.write().await;
+    
+    let rate_limit = limiter.entry(username.to_string()).or_insert(UsernameRateLimit {
+        attempts: 0,
+        last_attempt: now,
+        locked_until: None,
+    });
+    
+    // Check if currently locked
+    if let Some(locked_until) = rate_limit.locked_until {
+        if now < locked_until {
+            let remaining = locked_until.duration_since(now).unwrap_or_default().as_secs();
+            return Err(format!("Account temporarily locked due to too many failed attempts. Try again in {} seconds", remaining));
+        } else {
+            // Lock expired, reset
+            rate_limit.attempts = 0;
+            rate_limit.locked_until = None;
+        }
+    }
+    
+    // Check if we should reset the counter (more than 30 minutes since last attempt)
+    if let Ok(duration) = now.duration_since(rate_limit.last_attempt) {
+        if duration.as_secs() > 1800 {
+            rate_limit.attempts = 0;
+        }
+    }
+    
+    // Increment attempts
+    rate_limit.attempts += 1;
+    rate_limit.last_attempt = now;
+    
+    // Apply more aggressive lockout for targeted attacks on specific accounts
+    if rate_limit.attempts >= 5 {
+        // 5+ attempts = 30 minutes lockout
+        rate_limit.locked_until = Some(now + std::time::Duration::from_secs(1800));
+        return Err("Too many failed login attempts for this account. Locked for 30 minutes".to_string());
+    } else if rate_limit.attempts >= 3 {
+        // 3-4 attempts = 5 minutes lockout
+        rate_limit.locked_until = Some(now + std::time::Duration::from_secs(300));
+        return Err("Too many failed login attempts for this account. Locked for 5 minutes".to_string());
+    }
+    
+    Ok(())
+}
+
+// Reset username rate limit on successful login
+async fn reset_username_rate_limit(
+    username: &str,
+    rate_limiter: &Arc<RwLock<HashMap<String, UsernameRateLimit>>>,
+) {
+    let mut limiter = rate_limiter.write().await;
+    limiter.remove(username);
 }
 
 async fn serve_index(headers: HeaderMap, State(state): State<AppState>) -> Response {
@@ -724,19 +800,7 @@ async fn login_verify(
     // Get client IP for rate limiting
     let client_ip = get_client_ip(&headers);
     
-    // Check rate limiting
-    if let Err(msg) = check_login_rate_limit(&client_ip, &state.login_rate_limiter).await {
-        return Ok((HeaderMap::new(), Json(LoginVerifyResponse {
-            success: false,
-            m2: None,
-            user_type: None,
-            requires_2fa: None,
-            temp_2fa_session_id: None,
-            message: Some(msg),
-        })));
-    }
-    
-    // Get pending SRP auth
+    // Get pending SRP auth first to get username
     let pending = {
         let map = state.pending_srp.read().await;
         map.get(&req.session_id).cloned()
@@ -755,6 +819,30 @@ async fn login_verify(
             })));
         }
     };
+    
+    // Check IP-based rate limiting
+    if let Err(msg) = check_login_rate_limit(&client_ip, &state.login_rate_limiter).await {
+        return Ok((HeaderMap::new(), Json(LoginVerifyResponse {
+            success: false,
+            m2: None,
+            user_type: None,
+            requires_2fa: None,
+            temp_2fa_session_id: None,
+            message: Some(msg),
+        })));
+    }
+    
+    // Check username-based rate limiting (more aggressive)
+    if let Err(msg) = check_username_rate_limit(&pending.username, &state.username_rate_limiter).await {
+        return Ok((HeaderMap::new(), Json(LoginVerifyResponse {
+            success: false,
+            m2: None,
+            user_type: None,
+            requires_2fa: None,
+            temp_2fa_session_id: None,
+            message: Some(msg),
+        })));
+    }
     
     // Check expiration (5 minutes)
     if pending.created_at.elapsed().unwrap_or_default() > std::time::Duration::from_secs(300) {
@@ -851,8 +939,9 @@ async fn login_verify(
     // No 2FA required - create full session
     let session_id = create_session(user_id, &state.sessions).await;
     
-    // Reset rate limit on successful login
+    // Reset rate limits on successful login
     reset_login_rate_limit(&client_ip, &state.login_rate_limiter).await;
+    reset_username_rate_limit(&pending.username, &state.username_rate_limiter).await;
     
     let mut response_headers = HeaderMap::new();
     let cookie_value = if req.remember_me.unwrap_or(false) {
@@ -1064,6 +1153,29 @@ async fn change_password_verify(
         return Err(StatusCode::FORBIDDEN);
     }
     
+    // Acquire password change lock to prevent concurrent password changes (RACE CONDITION FIX)
+    {
+        let mut locks = state.password_change_locks.write().await;
+        let now = std::time::SystemTime::now();
+        
+        // Check if there's an active lock for this user
+        if let Some(&lock_time) = locks.get(&auth_state.user_id) {
+            // If lock is less than 30 seconds old, reject the request
+            if let Ok(elapsed) = now.duration_since(lock_time) {
+                if elapsed.as_secs() < 30 {
+                    return Ok(Json(ChangePasswordVerifyResponse {
+                        success: false,
+                        m2: None,
+                        message: Some("Password change already in progress. Please wait.".to_string()),
+                    }));
+                }
+            }
+        }
+        
+        // Acquire lock for this user
+        locks.insert(auth_state.user_id, now);
+    }
+    
     // Get pending SRP auth for password change
     let pending = {
         let map = state.pending_password_change.read().await;
@@ -1073,6 +1185,8 @@ async fn change_password_verify(
     let pending = match pending {
         Some(p) => p,
         None => {
+            // Release lock on error
+            state.password_change_locks.write().await.remove(&auth_state.user_id);
             return Ok(Json(ChangePasswordVerifyResponse {
                 success: false,
                 m2: None,
@@ -1083,6 +1197,7 @@ async fn change_password_verify(
     
     // Check expiration (5 minutes)
     if pending.created_at.elapsed().unwrap_or_default() > std::time::Duration::from_secs(300) {
+        state.password_change_locks.write().await.remove(&auth_state.user_id);
         state.pending_password_change.write().await.remove(&req.session_id);
         return Ok(Json(ChangePasswordVerifyResponse {
             success: false,
@@ -1093,6 +1208,7 @@ async fn change_password_verify(
     
     // Verify username matches (security check)
     if pending.username != auth_state.username {
+        state.password_change_locks.write().await.remove(&auth_state.user_id);
         state.pending_password_change.write().await.remove(&req.session_id);
         return Ok(Json(ChangePasswordVerifyResponse {
             success: false,
@@ -1105,6 +1221,7 @@ async fn change_password_verify(
     let a_pub = match hex::decode(&req.a_pub) {
         Ok(a) => a,
         Err(_) => {
+            state.password_change_locks.write().await.remove(&auth_state.user_id);
             state.pending_password_change.write().await.remove(&req.session_id);
             return Ok(Json(ChangePasswordVerifyResponse {
                 success: false,
@@ -1117,6 +1234,7 @@ async fn change_password_verify(
     let m1 = match hex::decode(&req.m1) {
         Ok(m) => m,
         Err(_) => {
+            state.password_change_locks.write().await.remove(&auth_state.user_id);
             state.pending_password_change.write().await.remove(&req.session_id);
             return Ok(Json(ChangePasswordVerifyResponse {
                 success: false,
@@ -1138,6 +1256,7 @@ async fn change_password_verify(
         Ok(m) => m,
         Err(e) => {
             log::debug!("SRP verification failed during password change: {}", e);
+            state.password_change_locks.write().await.remove(&auth_state.user_id);
             state.pending_password_change.write().await.remove(&req.session_id);
             return Ok(Json(ChangePasswordVerifyResponse {
                 success: false,
@@ -1196,7 +1315,7 @@ async fn change_password_verify(
     };
     
     // Update SRP credentials and optionally re-wrapped encryption key
-    if let Some(new_wrapped) = new_wrapped_key {
+    let db_result = if let Some(new_wrapped) = new_wrapped_key {
         sqlx::query("UPDATE users SET srp_salt = $1, srp_verifier = $2, totp_encryption_key_encrypted = $3 WHERE id = $4")
             .bind(&req.new_salt)
             .bind(&req.new_verifier)
@@ -1204,7 +1323,6 @@ async fn change_password_verify(
             .bind(auth_state.user_id)
             .execute(&state.db)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     } else {
         sqlx::query("UPDATE users SET srp_salt = $1, srp_verifier = $2 WHERE id = $3")
             .bind(&req.new_salt)
@@ -1212,8 +1330,13 @@ async fn change_password_verify(
             .bind(auth_state.user_id)
             .execute(&state.db)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
+    };
+    
+    // Release password change lock
+    state.password_change_locks.write().await.remove(&auth_state.user_id);
+    
+    // Check database result
+    db_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     Ok(Json(ChangePasswordVerifyResponse {
         success: true,
@@ -2094,8 +2217,19 @@ async fn verify_2fa_login(
     state.pending_2fa.write().await.remove(&req.temp_session_id);
     let session_id = create_session(pending.user_id, &state.sessions).await;
     
-    // Reset login rate limit on successful 2FA verification
+    // Get username to reset username rate limit
+    let username: Option<String> = sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
+        .bind(pending.user_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+    
+    // Reset login rate limits on successful 2FA verification
     reset_login_rate_limit(&client_ip, &state.login_rate_limiter).await;
+    if let Some(uname) = username {
+        reset_username_rate_limit(&uname, &state.username_rate_limiter).await;
+    }
     
     let mut response_headers = HeaderMap::new();
     let cookie_value = if pending.remember_me {

@@ -3,6 +3,7 @@ use sqlx::{PgPool, Row};
 use std::{collections::HashMap, sync::Arc, time::SystemTime};
 use tokio::sync::RwLock;
 use uuid::Uuid;
+use rand::Rng;
 
 pub struct AuthState {
     pub user_id: Uuid,
@@ -10,12 +11,13 @@ pub struct AuthState {
     pub is_admin: bool,
 }
 
-// Session data with expiration tracking
+// Session data with expiration tracking and CSRF token
 #[derive(Clone)]
 pub struct SessionData {
     pub user_id: Uuid,
     pub created_at: SystemTime,
     pub last_accessed: SystemTime,
+    pub csrf_token: String, // CSRF protection token
 }
 
 impl SessionData {
@@ -25,6 +27,7 @@ impl SessionData {
             user_id,
             created_at: now,
             last_accessed: now,
+            csrf_token: generate_csrf_token(),
         }
     }
     
@@ -39,6 +42,20 @@ impl SessionData {
     pub fn update_last_accessed(&mut self) {
         self.last_accessed = SystemTime::now();
     }
+    
+    pub fn regenerate_csrf_token(&mut self) {
+        self.csrf_token = generate_csrf_token();
+    }
+}
+
+/// Generate a cryptographically secure CSRF token
+fn generate_csrf_token() -> String {
+    use rand::distributions::Alphanumeric;
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect()
 }
 
 pub async fn create_session(
@@ -48,6 +65,77 @@ pub async fn create_session(
     let session_id = uuid::Uuid::new_v4().to_string();
     sessions.write().await.insert(session_id.clone(), SessionData::new(user_id));
     session_id
+}
+
+/// Regenerate session ID to prevent session fixation attacks
+/// Returns the new session ID and CSRF token
+pub async fn regenerate_session_id(
+    old_session_id: &str,
+    sessions: &Arc<RwLock<HashMap<String, SessionData>>>,
+) -> Option<(String, String)> {
+    let mut sessions_write = sessions.write().await;
+    
+    if let Some(mut session_data) = sessions_write.remove(old_session_id) {
+        // Generate new session ID and CSRF token
+        let new_session_id = uuid::Uuid::new_v4().to_string();
+        session_data.regenerate_csrf_token();
+        let csrf_token = session_data.csrf_token.clone();
+        
+        // Move session data to new ID
+        sessions_write.insert(new_session_id.clone(), session_data);
+        
+        Some((new_session_id, csrf_token))
+    } else {
+        None
+    }
+}
+
+/// Get CSRF token for a session
+pub async fn get_csrf_token(
+    session_id: &str,
+    sessions: &Arc<RwLock<HashMap<String, SessionData>>>,
+) -> Option<String> {
+    let sessions_read = sessions.read().await;
+    sessions_read.get(session_id).map(|s| s.csrf_token.clone())
+}
+
+/// Verify CSRF token
+pub async fn verify_csrf_token(
+    headers: &HeaderMap,
+    sessions: &Arc<RwLock<HashMap<String, SessionData>>>,
+) -> Result<(), String> {
+    // Extract session ID
+    let session_id = extract_session_id(headers)
+        .ok_or("No session found")?;
+    
+    // Get CSRF token from header
+    let csrf_token = headers.get("X-CSRF-Token")
+        .and_then(|h| h.to_str().ok())
+        .ok_or("No CSRF token provided")?;
+    
+    // Verify token
+    let sessions_read = sessions.read().await;
+    let session_data = sessions_read.get(&session_id)
+        .ok_or("Invalid session")?;
+    
+    // Constant-time comparison to prevent timing attacks
+    if constant_time_compare(csrf_token, &session_data.csrf_token) {
+        Ok(())
+    } else {
+        Err("Invalid CSRF token".to_string())
+    }
+}
+
+/// Constant-time string comparison to prevent timing attacks
+fn constant_time_compare(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0u8;
+    for (x, y) in a.bytes().zip(b.bytes()) {
+        result |= x ^ y;
+    }
+    result == 0
 }
 
 pub async fn verify_session(
