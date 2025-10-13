@@ -1346,29 +1346,29 @@ class TimelineApp {
         const newPassword = document.getElementById('new-password').value;
         
         try {
-            // Step 1: Create temporary unencrypted backup of all data
-            const backupData = {
-                events: this.events.map(event => ({
-                    title: event.title,
-                    description: event.description,
-                    timestamp: event.timestamp.toISOString(),
-                    tags: event.tags
-                })),
-                settings: this.settings,
-                notes: this.notes,
-                profilePicture: this.profilePicture,
-                exported_at: new Date().toISOString()
-            };
-            
-            // Step 2: Clear all user data from backend
-            const clearResponse = await fetch('/api/user-data', {
+            // Step 1: Initialize password change with SRP verification
+            const initResponse = await fetch('/api/change-password/init', {
                 method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({}),
                 credentials: 'include'
             });
             
-            if (!clearResponse.ok) {
-                throw new Error('Failed to clear user data');
+            if (!initResponse.ok) {
+                throw new Error('Failed to initialize password change');
             }
+            
+            const initData = await initResponse.json();
+            
+            // Step 2: Perform SRP authentication with old password to verify it
+            const srpAuth = await window.srpClient.startAuthentication(
+                this.currentUser.username,
+                oldPassword,
+                initData.salt,
+                initData.b_pub
+            );
             
             // Step 3: Generate new SRP credentials
             const newCredentials = await window.srpClient.generateCredentials(this.currentUser.username, newPassword);
@@ -1377,13 +1377,16 @@ class TimelineApp {
             const oldPasswordHash = await window.cryptoUtils.derivePasswordHash(oldPassword);
             const newPasswordHash = await window.cryptoUtils.derivePasswordHash(newPassword);
             
-            // Step 5: Change password in backend
-            const passwordResponse = await fetch('/api/change-password', {
+            // Step 5: Verify old password and change to new password in backend
+            const passwordResponse = await fetch('/api/change-password/verify', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
+                    session_id: initData.session_id,
+                    a_pub: srpAuth.A,
+                    m1: srpAuth.M1,
                     new_salt: newCredentials.salt,
                     new_verifier: newCredentials.verifier,
                     old_password_hash: oldPasswordHash,
@@ -1398,10 +1401,36 @@ class TimelineApp {
                 throw new Error(passwordData.message || 'Failed to change password');
             }
             
-            // Step 6: Update local password for encryption
+            // Password verification successful! Now handle data re-encryption
+            
+            // Step 6: Create temporary unencrypted backup of all data
+            const backupData = {
+                events: this.events.map(event => ({
+                    title: event.title,
+                    description: event.description,
+                    timestamp: event.timestamp.toISOString(),
+                    tags: event.tags
+                })),
+                settings: this.settings,
+                notes: this.notes,
+                profilePicture: this.profilePicture,
+                exported_at: new Date().toISOString()
+            };
+            
+            // Step 7: Clear all user data from backend
+            const clearResponse = await fetch('/api/user-data', {
+                method: 'POST',
+                credentials: 'include'
+            });
+            
+            if (!clearResponse.ok) {
+                throw new Error('Failed to clear user data');
+            }
+            
+            // Step 8: Update local password for encryption
             this.userPassword = newPassword;
             
-            // Step 5: Re-import all data with new encryption
+            // Step 9: Re-import all data with new encryption
             for (const event of backupData.events) {
                 try {
                     const titleEncrypted = await cryptoUtils.encrypt(event.title, this.userPassword);
@@ -1430,19 +1459,19 @@ class TimelineApp {
                 }
             }
             
-            // Step 6: Re-save settings with new encryption
+            // Step 10: Re-save settings with new encryption
             if (backupData.settings) {
                 this.settings = backupData.settings;
                 await this.saveSettingsToServer();
             }
             
-            // Step 7: Re-save notes with new encryption
+            // Step 11: Re-save notes with new encryption
             if (backupData.notes !== undefined) {
                 this.notes = backupData.notes;
                 await this.saveNotes();
             }
             
-            // Step 8: Re-save profile picture with new encryption
+            // Step 12: Re-save profile picture with new encryption
             if (backupData.profilePicture) {
                 this.profilePicture = backupData.profilePicture;
                 const encrypted = await cryptoUtils.encrypt(this.profilePicture, this.userPassword);
@@ -1458,7 +1487,7 @@ class TimelineApp {
                 });
             }
             
-            // Step 9: Clear the temporary backup data from memory
+            // Step 13: Clear the temporary backup data from memory
             // (JavaScript garbage collector will handle this)
             
             // Reload data to reflect changes
@@ -2022,23 +2051,45 @@ class TimelineApp {
         const newPassword = document.getElementById('admin-new-password').value;
         
         try {
-            // Generate new SRP credentials for the new password
+            // Step 1: Initialize password change with SRP verification
+            const initResponse = await fetch('/api/admin/change-password/init', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({}),
+                credentials: 'include'
+            });
+            
+            if (!initResponse.ok) {
+                throw new Error('Failed to initialize password change');
+            }
+            
+            const initData = await initResponse.json();
+            
+            // Step 2: Perform SRP authentication with old password to verify it
+            const srpAuth = await window.srpClient.startAuthentication(
+                this.currentUser.username,
+                oldPassword,
+                initData.salt,
+                initData.b_pub
+            );
+            
+            // Step 3: Generate new SRP credentials for the new password
             const newCredentials = await window.srpClient.generateCredentials(this.currentUser.username, newPassword);
             
-            // Derive password hashes (for TOTP re-encryption if needed)
-            const oldPasswordHash = await window.cryptoUtils.derivePasswordHash(oldPassword);
-            const newPasswordHash = await window.cryptoUtils.derivePasswordHash(newPassword);
-            
-            const response = await fetch('/api/admin/change-password', {
+            // Step 4: Verify old password and change to new password
+            const response = await fetch('/api/admin/change-password/verify', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
+                    session_id: initData.session_id,
+                    a_pub: srpAuth.A,
+                    m1: srpAuth.M1,
                     new_salt: newCredentials.salt,
-                    new_verifier: newCredentials.verifier,
-                    old_password_hash: oldPasswordHash,
-                    new_password_hash: newPasswordHash
+                    new_verifier: newCredentials.verifier
                 }),
                 credentials: 'include'
             });
