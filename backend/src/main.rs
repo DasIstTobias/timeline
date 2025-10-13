@@ -1151,56 +1151,56 @@ async fn change_password_verify(
     state.pending_password_change.write().await.remove(&req.session_id);
     
     // Get 2FA status
-    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted FROM users WHERE id = $1")
+    let row = sqlx::query("SELECT totp_enabled, totp_encryption_key_encrypted FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     let totp_enabled: bool = row.get("totp_enabled");
-    let totp_secret_encrypted: Option<String> = row.get("totp_secret_encrypted");
+    let totp_encryption_key_encrypted: Option<String> = row.get("totp_encryption_key_encrypted");
     
-    // If 2FA is enabled, re-encrypt the TOTP secret with new password hash
-    let new_totp_secret_encrypted = if totp_enabled && totp_secret_encrypted.is_some() {
-        let old_encrypted = totp_secret_encrypted.unwrap();
+    // If 2FA is enabled, re-wrap the encryption key with new password hash
+    let new_wrapped_key = if totp_enabled && totp_encryption_key_encrypted.is_some() {
+        let old_wrapped_key = totp_encryption_key_encrypted.unwrap();
         
-        // Decrypt with old password hash
-        let totp_secret = match crypto::decrypt_totp_secret(&old_encrypted, &req.old_password_hash) {
-            Ok(secret) => secret,
+        // Unwrap with old password hash
+        let encryption_key = match crypto::decrypt_encryption_key_with_password(&old_wrapped_key, &req.old_password_hash) {
+            Ok(key) => key,
             Err(e) => {
-                log::error!("Failed to decrypt TOTP secret during password change: {}", e);
+                log::error!("Failed to unwrap encryption key during password change: {}", e);
                 return Ok(Json(ChangePasswordVerifyResponse {
                     success: false,
                     m2: Some(hex::encode(&m2)),
-                    message: Some("Failed to re-encrypt 2FA secret. Invalid old password hash.".to_string()),
+                    message: Some("Failed to re-wrap 2FA encryption key. Invalid old password hash.".to_string()),
                 }));
             }
         };
         
-        // Re-encrypt with new password hash
-        let new_encrypted = match crypto::encrypt_totp_secret(&totp_secret, &req.new_password_hash, &auth_state.user_id.to_string()) {
-            Ok(encrypted) => encrypted,
+        // Re-wrap with new password hash
+        let new_wrapped = match crypto::encrypt_encryption_key_with_password(&encryption_key, &req.new_password_hash, &auth_state.user_id.to_string()) {
+            Ok(wrapped) => wrapped,
             Err(e) => {
-                log::error!("Failed to re-encrypt TOTP secret during password change: {}", e);
+                log::error!("Failed to re-wrap encryption key during password change: {}", e);
                 return Ok(Json(ChangePasswordVerifyResponse {
                     success: false,
                     m2: Some(hex::encode(&m2)),
-                    message: Some("Failed to re-encrypt 2FA secret with new password.".to_string()),
+                    message: Some("Failed to re-wrap 2FA encryption key with new password.".to_string()),
                 }));
             }
         };
         
-        Some(new_encrypted)
+        Some(new_wrapped)
     } else {
         None
     };
     
-    // Update SRP credentials and optionally re-encrypted TOTP secret
-    if let Some(new_encrypted) = new_totp_secret_encrypted {
-        sqlx::query("UPDATE users SET srp_salt = $1, srp_verifier = $2, totp_secret_encrypted = $3 WHERE id = $4")
+    // Update SRP credentials and optionally re-wrapped encryption key
+    if let Some(new_wrapped) = new_wrapped_key {
+        sqlx::query("UPDATE users SET srp_salt = $1, srp_verifier = $2, totp_encryption_key_encrypted = $3 WHERE id = $4")
             .bind(&req.new_salt)
             .bind(&req.new_verifier)
-            .bind(&new_encrypted)
+            .bind(&new_wrapped)
             .bind(auth_state.user_id)
             .execute(&state.db)
             .await
@@ -2462,28 +2462,60 @@ async fn enable_2fa(
         }));
     }
     
-    // Encrypt TOTP secret with user's password hash before storing
-    let user_id_str = auth_state.user_id.to_string();
-    let encrypted_secret = crypto::encrypt_totp_secret(&pending.secret, &req.password_hash, &user_id_str)
+    // SECURITY FIX: Generate random encryption key for TOTP secret (zero-knowledge)
+    let totp_encryption_key = crypto::generate_totp_encryption_key();
+    
+    // Encrypt TOTP secret with random key (NOT password-derived)
+    let encrypted_secret = crypto::encrypt_totp_secret_secure(&pending.secret, &totp_encryption_key)
         .map_err(|e| {
             log::error!("Failed to encrypt TOTP secret: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     
-    // CRITICAL SECURITY FIX: Test that we can decrypt with the provided password hash
+    // Wrap the encryption key with password hash so we can store it
+    let user_id_str = auth_state.user_id.to_string();
+    let wrapped_key = crypto::encrypt_encryption_key_with_password(
+        &totp_encryption_key,
+        &req.password_hash,
+        &user_id_str
+    ).map_err(|e| {
+        log::error!("Failed to wrap encryption key: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    
+    // CRITICAL SECURITY FIX: Test that we can unwrap and decrypt
     // This ensures the password hash is valid and the user won't be locked out
-    match crypto::decrypt_totp_secret(&encrypted_secret, &req.password_hash) {
-        Ok(decrypted) => {
-            if decrypted != pending.secret {
-                log::error!("Encryption/decryption test failed: secrets don't match");
+    match crypto::decrypt_encryption_key_with_password(&wrapped_key, &req.password_hash) {
+        Ok(unwrapped_key) => {
+            if unwrapped_key != totp_encryption_key {
+                log::error!("Key wrapping test failed: keys don't match");
                 return Ok(Json(Enable2FAResponse {
                     success: false,
                     message: Some("Encryption verification failed. Please try again.".to_string()),
                 }));
             }
+            // Also verify we can decrypt the TOTP secret
+            match crypto::decrypt_totp_secret_secure(&encrypted_secret, &unwrapped_key) {
+                Ok(decrypted) => {
+                    if decrypted != pending.secret {
+                        log::error!("TOTP decryption test failed: secrets don't match");
+                        return Ok(Json(Enable2FAResponse {
+                            success: false,
+                            message: Some("Encryption verification failed. Please try again.".to_string()),
+                        }));
+                    }
+                },
+                Err(e) => {
+                    log::error!("TOTP decryption test failed: {}", e);
+                    return Ok(Json(Enable2FAResponse {
+                        success: false,
+                        message: Some("Encryption verification failed. Please try again.".to_string()),
+                    }));
+                }
+            }
         },
         Err(e) => {
-            log::error!("Encryption test failed: {}", e);
+            log::error!("Key unwrapping test failed: {}", e);
             return Ok(Json(Enable2FAResponse {
                 success: false,
                 message: Some("Encryption verification failed. Please try again.".to_string()),
@@ -2491,9 +2523,10 @@ async fn enable_2fa(
         }
     }
     
-    // Enable 2FA with ENCRYPTED secret
-    sqlx::query("UPDATE users SET totp_secret_encrypted = $1, totp_enabled = true, totp_enabled_at = NOW() WHERE id = $2")
+    // Enable 2FA with ENCRYPTED secret and wrapped key
+    sqlx::query("UPDATE users SET totp_secret_encrypted = $1, totp_encryption_key_encrypted = $2, totp_enabled = true, totp_enabled_at = NOW() WHERE id = $3")
         .bind(&encrypted_secret)
+        .bind(&wrapped_key)
         .bind(auth_state.user_id)
         .execute(&state.db)
         .await
@@ -2541,7 +2574,7 @@ async fn disable_2fa(
     }
     
     // Get current 2FA status and encrypted secret
-    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted FROM users WHERE id = $1")
+    let row = sqlx::query("SELECT totp_enabled, totp_secret_encrypted, totp_encryption_key_encrypted FROM users WHERE id = $1")
         .bind(auth_state.user_id)
         .fetch_one(&state.db)
         .await
@@ -2549,6 +2582,7 @@ async fn disable_2fa(
     
     let totp_enabled: bool = row.get("totp_enabled");
     let totp_secret_encrypted: Option<String> = row.get("totp_secret_encrypted");
+    let totp_encryption_key_encrypted: Option<String> = row.get("totp_encryption_key_encrypted");
     
     if !totp_enabled {
         return Ok(Json(Disable2FAResponse {
@@ -2558,9 +2592,22 @@ async fn disable_2fa(
     }
     
     let encrypted_secret = totp_secret_encrypted.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let wrapped_key = totp_encryption_key_encrypted.ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    // Decrypt TOTP secret to verify code
-    let secret = match crypto::decrypt_totp_secret(&encrypted_secret, &req.password_hash) {
+    // Unwrap the encryption key with password hash
+    let encryption_key = match crypto::decrypt_encryption_key_with_password(&wrapped_key, &req.password_hash) {
+        Ok(k) => k,
+        Err(e) => {
+            log::error!("Failed to unwrap encryption key: {}", e);
+            return Ok(Json(Disable2FAResponse {
+                success: false,
+                message: Some("Failed to verify 2FA. Incorrect password.".to_string()),
+            }));
+        }
+    };
+    
+    // Decrypt TOTP secret with the unwrapped encryption key
+    let secret = match crypto::decrypt_totp_secret_secure(&encrypted_secret, &encryption_key) {
         Ok(s) => s,
         Err(e) => {
             log::error!("Failed to decrypt TOTP secret: {}", e);
@@ -2579,8 +2626,8 @@ async fn disable_2fa(
         }));
     }
     
-    // Disable 2FA
-    sqlx::query("UPDATE users SET totp_secret_encrypted = NULL, totp_enabled = false, totp_enabled_at = NULL WHERE id = $1")
+    // Disable 2FA and clear encryption key
+    sqlx::query("UPDATE users SET totp_secret_encrypted = NULL, totp_encryption_key_encrypted = NULL, totp_enabled = false, totp_enabled_at = NULL WHERE id = $1")
         .bind(auth_state.user_id)
         .execute(&state.db)
         .await

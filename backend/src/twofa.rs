@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
-use totp_lite::{totp, Sha1};
+use totp_lite::{totp, Sha256};
 
 // Brute-force protection: track failed attempts per identifier (IP or session)
 pub struct TwoFABruteForceProtection {
@@ -118,11 +118,11 @@ pub fn verify_totp_code(secret: &str, code: &str) -> bool {
         .unwrap()
         .as_secs();
 
-    // Check current time and 30 seconds before to account for clock skew
-    // Note: We only check previous and current windows (60s total), not future
-    for offset in [-30i64, 0] {
+    // Check current time, 30 seconds before AND after to account for clock skew (90s total window)
+    // This provides better tolerance for devices with clock drift
+    for offset in [-30i64, 0, 30] {
         let test_timestamp = (timestamp as i64 + offset) as u64;
-        let generated_code = totp::<Sha1>(&secret_bytes, test_timestamp);
+        let generated_code = totp::<Sha256>(&secret_bytes, test_timestamp);
         
         // totp() returns a String, but it may not always be 6 digits
         // Extract the last 6 digits
@@ -138,9 +138,10 @@ pub fn verify_totp_code(secret: &str, code: &str) -> bool {
 }
 
 /// Generate the TOTP provisioning URI for QR codes
+/// Now uses SHA-256 algorithm (more secure than SHA-1)
 pub fn generate_totp_uri(secret: &str, username: &str, issuer: &str) -> String {
     format!(
-        "otpauth://totp/{}:{}?secret={}&issuer={}",
+        "otpauth://totp/{}:{}?secret={}&issuer={}&algorithm=SHA256&digits=6&period=30",
         urlencoding::encode(issuer),
         urlencoding::encode(username),
         secret,
