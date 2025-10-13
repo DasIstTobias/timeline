@@ -104,7 +104,7 @@ pub fn generate_totp_secret() -> String {
     secret
 }
 
-/// Verify a TOTP code against a secret
+/// Verify a TOTP code against a secret using constant-time comparison
 pub fn verify_totp_code(secret: &str, code: &str) -> bool {
     // Decode base32 secret
     let secret_bytes = match base32_decode(secret) {
@@ -129,12 +129,25 @@ pub fn verify_totp_code(secret: &str, code: &str) -> bool {
         let code_num: u64 = generated_code.parse().unwrap_or(0);
         let code_6_digit = format!("{:06}", code_num % 1000000);
         
-        if code_6_digit == code {
+        // Use constant-time comparison to prevent timing attacks
+        if constant_time_compare(&code_6_digit, code) {
             return true;
         }
     }
 
     false
+}
+
+/// Constant-time string comparison to prevent timing attacks
+fn constant_time_compare(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0u8;
+    for (x, y) in a.bytes().zip(b.bytes()) {
+        result |= x ^ y;
+    }
+    result == 0
 }
 
 /// Generate the TOTP provisioning URI for QR codes
