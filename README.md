@@ -63,17 +63,19 @@ cd timeline
 
 2. Use the settings (DOMAIN, REQUIRE_TLS, USE_SELF_SIGNED_SSL) in the "docker-compose.yml" to configure the application.
 
-3. Start the application:
+3. Use "HTTP_PORT" and "HTTPS_PORT" in the "docker-compose.yml" to configure the ports and make sure they are the same as the docker port configuration.
+
+4. Start the application:
 ```bash
 docker compose up --build -d
 ```
 
-4. Retrieve admin credentials:
+5. Retrieve admin credentials:
 ```bash
 cat admin_credentials.txt
 ```
 
-5. Access the application at `http://localhost:8080` or `https://localhost:8443` and login with username "admin" and the password from step 4.
+6. Access the application at `http://localhost:8080` or `https://localhost:8443` and login with username "admin" and the password from step 4.
 
 ### Initial Configuration
 
@@ -100,7 +102,7 @@ Note: Administrators cannot access user data due to zero-knowledge encryption.
 - Frontend: HTML, CSS, JavaScript
 - Deployment: Docker
 
-### Ports
+### Ports (changeable)
 - HTTP: 8080
 - HTTPS: 8443 (when configured)
 
