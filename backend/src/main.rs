@@ -49,6 +49,29 @@ fn validate_input_string(input: &str, max_length: Option<usize>) -> Result<(), S
     Ok(())
 }
 
+// Security audit logging for important events
+fn audit_log(event_type: &str, username: Option<&str>, user_id: Option<Uuid>, details: &str, success: bool) {
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let user_info = if let Some(uname) = username {
+        format!("user:{}", uname)
+    } else if let Some(uid) = user_id {
+        format!("user_id:{}", uid)
+    } else {
+        "anonymous".to_string()
+    };
+    
+    let status = if success { "SUCCESS" } else { "FAILURE" };
+    
+    log::info!(
+        "[AUDIT] {} | {} | {} | {} | {}",
+        timestamp,
+        event_type,
+        user_info,
+        status,
+        details
+    );
+}
+
 type AppState = Arc<AppData>;
 
 #[derive(Clone)]
@@ -312,10 +335,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             is_https_port: false,
         });
         
-        // Create HTTPS app state (shares same sessions/data)
+        // Create HTTPS app state (SEPARATE session store for security, shares other data)
         let https_app_state = AppState::new(AppData {
             db: db.clone(),
-            sessions: http_app_state.sessions.clone(),
+            sessions: Arc::new(RwLock::new(HashMap::new())), // SEPARATE session store for HTTPS
             pending_2fa: http_app_state.pending_2fa.clone(),
             pending_2fa_secrets: http_app_state.pending_2fa_secrets.clone(),
             pending_srp: http_app_state.pending_srp.clone(),
@@ -330,8 +353,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             is_https_port: true,
         });
         
-        // Start cleanup tasks with HTTP app state
-        let sessions_for_cleanup = http_app_state.sessions.clone();
+        // Start cleanup tasks with both HTTP and HTTPS app states
+        let http_sessions_for_cleanup = http_app_state.sessions.clone();
+        let https_sessions_for_cleanup = https_app_state.sessions.clone();
         let pending_2fa_cleanup = http_app_state.pending_2fa.clone();
         let pending_secrets_cleanup = http_app_state.pending_2fa_secrets.clone();
         let pending_srp_cleanup = http_app_state.pending_srp.clone();
@@ -339,11 +363,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let pending_password_change_cleanup = http_app_state.pending_password_change.clone();
         let pending_admin_password_change_cleanup = http_app_state.pending_admin_password_change.clone();
         
+        // Cleanup HTTP sessions
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-                auth::cleanup_expired_sessions(&sessions_for_cleanup).await;
-                log::info!("Cleaned up expired sessions");
+                auth::cleanup_expired_sessions(&http_sessions_for_cleanup).await;
+                log::info!("Cleaned up expired HTTP sessions");
+            }
+        });
+        
+        // Cleanup HTTPS sessions separately
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                auth::cleanup_expired_sessions(&https_sessions_for_cleanup).await;
+                log::info!("Cleaned up expired HTTPS sessions");
             }
         });
         
@@ -943,6 +977,9 @@ async fn login_verify(
     reset_login_rate_limit(&client_ip, &state.login_rate_limiter).await;
     reset_username_rate_limit(&pending.username, &state.username_rate_limiter).await;
     
+    // Audit log successful login
+    audit_log("LOGIN", Some(&pending.username), Some(user_id), &format!("IP: {}", client_ip), true);
+    
     let mut response_headers = HeaderMap::new();
     let cookie_value = if req.remember_me.unwrap_or(false) {
         format!("session_id={}; HttpOnly; Path=/; Max-Age=86400; SameSite=Strict", session_id)
@@ -966,8 +1003,11 @@ async fn logout(
     State(state): State<AppState>,
 ) -> Result<(HeaderMap, Json<serde_json::Value>), StatusCode> {
     // Verify session exists before logout
-    let _auth_state = verify_session(&headers, &state.sessions, &state.db).await
+    let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    // Audit log logout
+    audit_log("LOGOUT", Some(&auth_state.username), Some(auth_state.user_id), "", true);
     
     if let Some(session_id) = auth::extract_session_id(&headers) {
         state.sessions.write().await.remove(&session_id);
@@ -1337,6 +1377,9 @@ async fn change_password_verify(
     
     // Check database result
     db_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Audit log successful password change
+    audit_log("PASSWORD_CHANGE", Some(&auth_state.username), Some(auth_state.user_id), "", true);
     
     Ok(Json(ChangePasswordVerifyResponse {
         success: true,
@@ -2709,6 +2752,9 @@ async fn enable_2fa(
     // Clean up temporary storage
     state.pending_2fa_secrets.write().await.remove(&auth_state.user_id);
     
+    // Audit log 2FA enable
+    audit_log("2FA_ENABLE", Some(&auth_state.username), Some(auth_state.user_id), "", true);
+    
     Ok(Json(Enable2FAResponse {
         success: true,
         message: None,
@@ -2806,6 +2852,9 @@ async fn disable_2fa(
         .execute(&state.db)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Audit log 2FA disable
+    audit_log("2FA_DISABLE", Some(&auth_state.username), Some(auth_state.user_id), "", true);
     
     Ok(Json(Disable2FAResponse {
         success: true,
