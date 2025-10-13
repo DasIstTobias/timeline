@@ -3,6 +3,7 @@ class TimelineApp {
     constructor() {
         this.currentUser = null;
         this.userPassword = null;
+        this.csrfToken = null; // CSRF token for state-changing requests
         this.events = [];
         this.tags = [];
         this.filteredEvents = [];
@@ -146,6 +147,10 @@ class TimelineApp {
             if (response.ok) {
                 const data = await response.json();
                 this.currentUser = data;
+                
+                // Fetch CSRF token for authenticated users
+                await this.fetchCsrfToken();
+                
                 if (data.is_admin) {
                     this.showAdminDashboard();
                 } else {
@@ -171,7 +176,7 @@ class TimelineApp {
             // Step 1: Initialize SRP authentication
             const initResponse = await fetch('/api/login/init', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ username }),
@@ -192,7 +197,7 @@ class TimelineApp {
             // Step 3: Verify with server
             const verifyResponse = await fetch('/api/login/verify', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -224,7 +229,7 @@ class TimelineApp {
                     
                     const verify2FAResponse = await fetch('/api/verify-2fa', {
                         method: 'POST',
-                        headers: {
+                        headers: app.getCsrfHeaders(),
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({
@@ -242,6 +247,10 @@ class TimelineApp {
                         localStorage.setItem('rememberMe', rememberMe.toString());
                         this.userPassword = password;
                         this.currentUser = { username, is_admin: false };
+                        
+                        // Fetch CSRF token for state-changing requests
+                        await this.fetchCsrfToken();
+                        
                         await this.loadUserData();
                         this.showUserTimeline();
                     } else {
@@ -256,6 +265,9 @@ class TimelineApp {
                 localStorage.setItem('rememberMe', rememberMe.toString());
                 this.userPassword = password;
                 this.currentUser = { username, is_admin: verifyData.user_type === 'admin' };
+                
+                // Fetch CSRF token for state-changing requests
+                await this.fetchCsrfToken();
                 
                 if (verifyData.user_type === 'admin') {
                     this.showAdminDashboard();
@@ -303,6 +315,7 @@ class TimelineApp {
         // Null out all sensitive properties
         this.currentUser = null;
         this.userPassword = null;
+        this.csrfToken = null;
         this.temp2FASecret = null;
         this.temp2FAPassword = null;
         this.temp2FASessionId = null;
@@ -312,6 +325,31 @@ class TimelineApp {
         
         // Clear local storage
         localStorage.removeItem('rememberMe');
+    }
+    
+    async fetchCsrfToken() {
+        try {
+            const response = await fetch('/api/csrf-token', {
+                credentials: 'include'
+            });
+            if (response.ok) {
+                const data = await response.json();
+                this.csrfToken = data.csrf_token;
+            }
+        } catch (error) {
+            console.error('Failed to fetch CSRF token:', error);
+        }
+    }
+    
+    // Helper to get headers with CSRF token
+    getCsrfHeaders() {
+        const headers = {
+            'Content-Type': 'application/json'
+        };
+        if (this.csrfToken) {
+            headers['X-CSRF-Token'] = this.csrfToken;
+        }
+        return headers;
     }
 
     showLoginScreen() {
@@ -938,9 +976,7 @@ class TimelineApp {
         try {
             const response = await fetch('/api/users', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: this.getCsrfHeaders(),
                 body: JSON.stringify({ username }),
                 credentials: 'include'
             });
@@ -972,7 +1008,7 @@ class TimelineApp {
                     
                     const response = await fetch(`/api/users/${userId}`, {
                         method: 'POST',
-                        headers: {
+                        headers: app.getCsrfHeaders(),
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({ confirmation_username: confirmationUsername }),
@@ -1033,9 +1069,7 @@ class TimelineApp {
             
             const response = await fetch('/api/events', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: this.getCsrfHeaders(),
                 body: JSON.stringify({
                     title_encrypted: titleEncrypted,
                     description_encrypted: descriptionEncrypted,
@@ -1122,7 +1156,7 @@ class TimelineApp {
                 try {
                     const response = await fetch(`/api/events/${eventId}`, {
                         method: 'POST',
-                        headers: {
+                        headers: app.getCsrfHeaders(),
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({ confirmation_title: confirmationTitle }),
@@ -1273,7 +1307,7 @@ class TimelineApp {
             
             const response = await fetch('/api/profile-picture', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -1349,7 +1383,7 @@ class TimelineApp {
             // Step 1: Initialize password change with SRP verification
             const initResponse = await fetch('/api/change-password/init', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({}),
@@ -1380,7 +1414,7 @@ class TimelineApp {
             // Step 5: Verify old password and change to new password in backend
             const passwordResponse = await fetch('/api/change-password/verify', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -1443,7 +1477,7 @@ class TimelineApp {
                     
                     await fetch('/api/events', {
                         method: 'POST',
-                        headers: {
+                        headers: app.getCsrfHeaders(),
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({
@@ -1477,7 +1511,7 @@ class TimelineApp {
                 const encrypted = await cryptoUtils.encrypt(this.profilePicture, this.userPassword);
                 await fetch('/api/profile-picture', {
                     method: 'POST',
-                    headers: {
+                    headers: app.getCsrfHeaders(),
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
@@ -1574,7 +1608,7 @@ class TimelineApp {
             
             const response = await fetch('/api/settings', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -1627,7 +1661,7 @@ class TimelineApp {
             
             const response = await fetch('/api/notes', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -1773,7 +1807,7 @@ class TimelineApp {
                     
                     await fetch('/api/events', {
                         method: 'POST',
-                        headers: {
+                        headers: app.getCsrfHeaders(),
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({
@@ -2054,7 +2088,7 @@ class TimelineApp {
             // Step 1: Initialize password change with SRP verification
             const initResponse = await fetch('/api/admin/change-password/init', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({}),
@@ -2081,7 +2115,7 @@ class TimelineApp {
             // Step 4: Verify old password and change to new password
             const response = await fetch('/api/admin/change-password/verify', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -2303,7 +2337,7 @@ class TimelineApp {
         try {
             const response = await fetch('/api/verify-2fa', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -2403,7 +2437,7 @@ class TimelineApp {
             // Step 1: Initialize SRP authentication for 2FA password verification
             const initResponse = await fetch('/api/2fa/verify-password/init', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({}),
@@ -2424,7 +2458,7 @@ class TimelineApp {
             // Step 3: Verify password with server
             const verifyResponse = await fetch('/api/2fa/verify-password/verify', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -2470,7 +2504,7 @@ class TimelineApp {
             // Password has already been verified via SRP in continueEnable2FAStep1
             const response = await fetch('/api/2fa/setup', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({}),
@@ -2537,7 +2571,7 @@ class TimelineApp {
             
             const response = await fetch('/api/2fa/enable', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -2612,7 +2646,7 @@ class TimelineApp {
             
             const response = await fetch('/api/2fa/disable', {
                 method: 'POST',
-                headers: {
+                headers: app.getCsrfHeaders(),
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({

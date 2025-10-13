@@ -291,6 +291,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/verify-2fa", post(verify_2fa_login))
         .route("/api/logout", post(logout))
         .route("/api/user-info", get(get_user_info))
+        .route("/api/csrf-token", get(get_csrf_token_endpoint))
         .route("/api/register", post(register))
         .route("/api/change-password/init", post(change_password_init))
         .route("/api/change-password/verify", post(change_password_verify))
@@ -540,7 +541,25 @@ async fn get_user_info(
     })))
 }
 
-
+async fn get_csrf_token_endpoint(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify user has a valid session
+    let _ = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    // Get CSRF token from session
+    let session_id = auth::extract_session_id(&headers)
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    
+    let csrf_token = auth::get_csrf_token(&session_id, &state.sessions).await
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(Json(serde_json::json!({
+        "csrf_token": csrf_token
+    })))
+}
 
 // Helper function to get client IP address
 fn get_client_ip(headers: &HeaderMap) -> String {
