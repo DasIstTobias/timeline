@@ -2,6 +2,8 @@
 
 This is a secure personal timeline application for documenting and managing life events with client-side zero-knowledge encryption.
 
+![Screenshot](img/Screenshot_20251014_144212.png)
+
 ## Features
 
 ### Security
