@@ -3,6 +3,7 @@ class TimelineApp {
     constructor() {
         this.currentUser = null;
         this.userPassword = null;
+        this.csrfToken = null; // CSRF token for state-changing requests
         this.events = [];
         this.tags = [];
         this.filteredEvents = [];
@@ -146,6 +147,10 @@ class TimelineApp {
             if (response.ok) {
                 const data = await response.json();
                 this.currentUser = data;
+                
+                // Fetch CSRF token for authenticated users
+                await this.fetchCsrfToken();
+                
                 if (data.is_admin) {
                     this.showAdminDashboard();
                 } else {
@@ -242,6 +247,10 @@ class TimelineApp {
                         localStorage.setItem('rememberMe', rememberMe.toString());
                         this.userPassword = password;
                         this.currentUser = { username, is_admin: false };
+                        
+                        // Fetch CSRF token for state-changing requests
+                        await this.fetchCsrfToken();
+                        
                         await this.loadUserData();
                         this.showUserTimeline();
                     } else {
@@ -256,6 +265,9 @@ class TimelineApp {
                 localStorage.setItem('rememberMe', rememberMe.toString());
                 this.userPassword = password;
                 this.currentUser = { username, is_admin: verifyData.user_type === 'admin' };
+                
+                // Fetch CSRF token for state-changing requests
+                await this.fetchCsrfToken();
                 
                 if (verifyData.user_type === 'admin') {
                     this.showAdminDashboard();
@@ -303,6 +315,7 @@ class TimelineApp {
         // Null out all sensitive properties
         this.currentUser = null;
         this.userPassword = null;
+        this.csrfToken = null;
         this.temp2FASecret = null;
         this.temp2FAPassword = null;
         this.temp2FASessionId = null;
@@ -312,6 +325,31 @@ class TimelineApp {
         
         // Clear local storage
         localStorage.removeItem('rememberMe');
+    }
+    
+    async fetchCsrfToken() {
+        try {
+            const response = await fetch('/api/csrf-token', {
+                credentials: 'include'
+            });
+            if (response.ok) {
+                const data = await response.json();
+                this.csrfToken = data.csrf_token;
+            }
+        } catch (error) {
+            console.error('Failed to fetch CSRF token:', error);
+        }
+    }
+    
+    // Helper to get headers with CSRF token for POST/DELETE requests
+    getCsrfHeaders() {
+        const headers = {
+            'Content-Type': 'application/json'
+        };
+        if (this.csrfToken) {
+            headers['X-CSRF-Token'] = this.csrfToken;
+        }
+        return headers;
     }
 
     showLoginScreen() {
@@ -938,9 +976,7 @@ class TimelineApp {
         try {
             const response = await fetch('/api/users', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: this.getCsrfHeaders(),
                 body: JSON.stringify({ username }),
                 credentials: 'include'
             });
@@ -972,9 +1008,7 @@ class TimelineApp {
                     
                     const response = await fetch(`/api/users/${userId}`, {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: this.getCsrfHeaders(),
                         body: JSON.stringify({ confirmation_username: confirmationUsername }),
                         credentials: 'include'
                     });
@@ -1033,9 +1067,7 @@ class TimelineApp {
             
             const response = await fetch('/api/events', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: this.getCsrfHeaders(),
                 body: JSON.stringify({
                     title_encrypted: titleEncrypted,
                     description_encrypted: descriptionEncrypted,
@@ -1122,9 +1154,7 @@ class TimelineApp {
                 try {
                     const response = await fetch(`/api/events/${eventId}`, {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: this.getCsrfHeaders(),
                         body: JSON.stringify({ confirmation_title: confirmationTitle }),
                         credentials: 'include'
                     });
@@ -1273,9 +1303,7 @@ class TimelineApp {
             
             const response = await fetch('/api/profile-picture', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: this.getCsrfHeaders(),
                 body: JSON.stringify({
                     profile_picture_encrypted: encrypted
                 }),
@@ -1302,6 +1330,7 @@ class TimelineApp {
         try {
             const response = await fetch('/api/profile-picture', {
                 method: 'DELETE',
+                headers: this.getCsrfHeaders(),
                 credentials: 'include'
             });
 
@@ -1420,6 +1449,7 @@ class TimelineApp {
             // Step 7: Clear all user data from backend
             const clearResponse = await fetch('/api/user-data', {
                 method: 'POST',
+                headers: this.getCsrfHeaders(),
                 credentials: 'include'
             });
             
@@ -1443,9 +1473,7 @@ class TimelineApp {
                     
                     await fetch('/api/events', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: app.getCsrfHeaders(),
                         body: JSON.stringify({
                             title_encrypted: titleEncrypted,
                             description_encrypted: descriptionEncrypted,
@@ -1477,9 +1505,7 @@ class TimelineApp {
                 const encrypted = await cryptoUtils.encrypt(this.profilePicture, this.userPassword);
                 await fetch('/api/profile-picture', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: app.getCsrfHeaders(),
                     body: JSON.stringify({
                         profile_picture_encrypted: encrypted
                     }),
@@ -1574,9 +1600,7 @@ class TimelineApp {
             
             const response = await fetch('/api/settings', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: this.getCsrfHeaders(),
                 body: JSON.stringify({
                     settings_encrypted: settingsEncrypted,
                     display_name_encrypted: displayNameEncrypted
@@ -1627,9 +1651,7 @@ class TimelineApp {
             
             const response = await fetch('/api/notes', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: this.getCsrfHeaders(),
                 body: JSON.stringify({
                     content_encrypted: notesEncrypted
                 }),
@@ -1773,9 +1795,7 @@ class TimelineApp {
                     
                     await fetch('/api/events', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: app.getCsrfHeaders(),
                         body: JSON.stringify({
                             title_encrypted: titleEncrypted,
                             description_encrypted: descriptionEncrypted,

@@ -20,7 +20,7 @@ mod srp;
 mod tls;
 mod twofa;
 
-use auth::{create_session, verify_session, SessionData};
+use auth::{create_session, verify_session, verify_csrf_token, SessionData};
 use crypto::generate_random_password;
 use tls::TlsConfig;
 use twofa::TwoFABruteForceProtection;
@@ -85,6 +85,7 @@ struct AppData {
     twofa_protection: Arc<TwoFABruteForceProtection>,
     login_rate_limiter: Arc<RwLock<HashMap<String, LoginRateLimit>>>, // IP -> rate limit data
     username_rate_limiter: Arc<RwLock<HashMap<String, UsernameRateLimit>>>, // username -> rate limit data
+    registration_rate_limiter: Arc<RwLock<HashMap<String, RegistrationRateLimit>>>, // Admin session -> rate limit data
     tls_config: Arc<RwLock<TlsConfig>>,
     is_https_port: bool, // Track which port this instance is running on
     password_change_locks: Arc<RwLock<HashMap<Uuid, std::time::SystemTime>>>, // user_id -> lock timestamp for preventing concurrent password changes
@@ -104,6 +105,13 @@ struct UsernameRateLimit {
     attempts: u32,
     last_attempt: std::time::SystemTime,
     locked_until: Option<std::time::SystemTime>,
+}
+
+// Rate limiting for user registration by admin
+#[derive(Clone)]
+struct RegistrationRateLimit {
+    count: u32,
+    window_start: std::time::SystemTime,
 }
 
 // Temporary authentication state while waiting for 2FA
@@ -281,6 +289,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/verify-2fa", post(verify_2fa_login))
         .route("/api/logout", post(logout))
         .route("/api/user-info", get(get_user_info))
+        .route("/api/csrf-token", get(get_csrf_token_endpoint))
         .route("/api/register", post(register))
         .route("/api/change-password/init", post(change_password_init))
         .route("/api/change-password/verify", post(change_password_verify))
@@ -328,6 +337,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
             login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
             username_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+            registration_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
             password_change_locks: Arc::new(RwLock::new(HashMap::new())),
             tls_config: tls_config.clone(),
             is_https_port: false,
@@ -346,6 +356,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             twofa_protection: http_app_state.twofa_protection.clone(),
             login_rate_limiter: http_app_state.login_rate_limiter.clone(),
             username_rate_limiter: http_app_state.username_rate_limiter.clone(),
+            registration_rate_limiter: http_app_state.registration_rate_limiter.clone(),
             password_change_locks: http_app_state.password_change_locks.clone(),
             tls_config: tls_config.clone(),
             is_https_port: true,
@@ -498,6 +509,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             twofa_protection: Arc::new(TwoFABruteForceProtection::new()),
             login_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
             username_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
+            registration_rate_limiter: Arc::new(RwLock::new(HashMap::new())),
             password_change_locks: Arc::new(RwLock::new(HashMap::new())),
             tls_config: tls_config.clone(),
             is_https_port: false,
@@ -527,7 +539,25 @@ async fn get_user_info(
     })))
 }
 
-
+async fn get_csrf_token_endpoint(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify user has a valid session
+    let _ = verify_session(&headers, &state.sessions, &state.db).await
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    
+    // Get CSRF token from session
+    let session_id = auth::extract_session_id(&headers)
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    
+    let csrf_token = auth::get_csrf_token(&session_id, &state.sessions).await
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(Json(serde_json::json!({
+        "csrf_token": csrf_token
+    })))
+}
 
 // Helper function to get client IP address
 fn get_client_ip(headers: &HeaderMap) -> String {
@@ -718,6 +748,14 @@ async fn serve_index(headers: HeaderMap, State(state): State<AppState>) -> Respo
         "Permissions-Policy",
         "geolocation=(), microphone=(), camera=()".parse().unwrap(),
     );
+    
+    // Add HSTS header if running on HTTPS
+    if state.is_https_port {
+        response_headers.insert(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains".parse().unwrap(),
+        );
+    }
     
     (response_headers, Html(html)).into_response()
 }
@@ -1036,6 +1074,12 @@ async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, StatusCode> {
+    // Verify CSRF token
+    if let Err(e) = verify_csrf_token(&headers, &state.sessions).await {
+        log::warn!("CSRF token verification failed: {}", e);
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
     // Verify admin session
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
@@ -1046,6 +1090,38 @@ async fn register(
             password: None,
             message: Some("Admin access required".to_string()),
         }));
+    }
+    
+    // Rate limiting: Max 10 registrations per hour per admin
+    {
+        let mut rate_limiter = state.registration_rate_limiter.write().await;
+        let now = std::time::SystemTime::now();
+        let session_id = auth::extract_session_id(&headers).unwrap_or_default();
+        
+        let rate_limit = rate_limiter.entry(session_id.clone()).or_insert(RegistrationRateLimit {
+            count: 0,
+            window_start: now,
+        });
+        
+        // Check if window has expired (1 hour)
+        if let Ok(elapsed) = now.duration_since(rate_limit.window_start) {
+            if elapsed.as_secs() > 3600 {
+                // Reset window
+                rate_limit.count = 0;
+                rate_limit.window_start = now;
+            }
+        }
+        
+        // Check rate limit
+        if rate_limit.count >= 10 {
+            return Ok(Json(RegisterResponse {
+                success: false,
+                password: None,
+                message: Some("Rate limit exceeded. Maximum 10 registrations per hour.".to_string()),
+            }));
+        }
+        
+        rate_limit.count += 1;
     }
     
     // Validate username - only allow alphanumeric characters, underscores, and hyphens
@@ -1625,6 +1701,11 @@ async fn delete_user(
     State(state): State<AppState>,
     Json(req): Json<DeleteUserRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify CSRF token
+    if let Err(_) = verify_csrf_token(&headers, &state.sessions).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
@@ -1666,6 +1747,11 @@ async fn clear_user_data(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify CSRF token
+    if let Err(_) = verify_csrf_token(&headers, &state.sessions).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
@@ -1749,6 +1835,11 @@ async fn create_event(
     State(state): State<AppState>,
     Json(req): Json<CreateEventRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify CSRF token
+    if let Err(_) = verify_csrf_token(&headers, &state.sessions).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
@@ -1829,6 +1920,11 @@ async fn delete_event(
     State(state): State<AppState>,
     Json(_req): Json<DeleteEventRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify CSRF token
+    if let Err(_) = verify_csrf_token(&headers, &state.sessions).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
@@ -1925,6 +2021,11 @@ async fn save_settings(
     State(state): State<AppState>,
     Json(req): Json<SaveSettingsRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify CSRF token
+    if let Err(_) = verify_csrf_token(&headers, &state.sessions).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
@@ -1971,6 +2072,11 @@ async fn save_profile_picture(
     State(state): State<AppState>,
     Json(req): Json<SaveProfilePictureRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify CSRF token
+    if let Err(_) = verify_csrf_token(&headers, &state.sessions).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
@@ -2000,6 +2106,11 @@ async fn delete_profile_picture(
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify CSRF token
+    if let Err(_) = verify_csrf_token(&headers, &state.sessions).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
@@ -2061,6 +2172,11 @@ async fn save_notes(
     State(state): State<AppState>,
     Json(req): Json<SaveNotesRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    // Verify CSRF token
+    if let Err(_) = verify_csrf_token(&headers, &state.sessions).await {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    
     let auth_state = verify_session(&headers, &state.sessions, &state.db).await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
     
