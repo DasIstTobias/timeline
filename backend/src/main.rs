@@ -54,8 +54,6 @@ fn audit_log(event_type: &str, username: Option<&str>, user_id: Option<Uuid>, de
     let timestamp = chrono::Utc::now().to_rfc3339();
     let user_info = if let Some(uname) = username {
         format!("user:{}", uname)
-    } else if let Some(uid) = user_id {
-        format!("user_id:{}", uid)
     } else {
         "anonymous".to_string()
     };
@@ -2506,7 +2504,7 @@ async fn verify_password_for_2fa_verify(
     // Clean up the SRP session
     state.pending_2fa_password_verify.write().await.remove(&req.session_id);
     
-    log::info!("Password verified for 2FA setup for user {}", auth_state.user_id);
+    log::info!("Password verified for 2FA setup");
     
     Ok(Json(VerifyPasswordFor2FAVerifyResponse {
         success: true,
@@ -2567,7 +2565,7 @@ async fn setup_2fa(
     };
     
     if !password_verified {
-        log::warn!("Attempt to setup 2FA without password verification for user {}", auth_state.user_id);
+        log::warn!("Attempt to setup 2FA without password verification");
         return Ok(Json(Setup2FAResponse {
             success: false,
             secret: None,
@@ -2591,7 +2589,7 @@ async fn setup_2fa(
     
     let qr_uri = twofa::generate_totp_uri(&secret, &auth_state.username, "Timeline");
     
-    log::info!("2FA setup initiated for user {} after password verification", auth_state.user_id);
+    log::info!("2FA setup initiated after password verification");
     
     Ok(Json(Setup2FAResponse {
         success: true,
