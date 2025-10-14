@@ -75,7 +75,7 @@ docker compose up --build -d
 cat admin_credentials.txt
 ```
 
-6. Access the application at `http://localhost:8080` or `https://localhost:8443` and login with username "admin" and the password from step 4.
+6. Access the application at `http://localhost:8080` or `https://localhost:8443` (default ports) and login with username "admin" and the password from step 5.
 
 ### Initial Configuration
 
