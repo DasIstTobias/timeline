@@ -1008,9 +1008,7 @@ class TimelineApp {
                     
                     const response = await fetch(`/api/users/${userId}`, {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: this.getCsrfHeaders(),
                         body: JSON.stringify({ confirmation_username: confirmationUsername }),
                         credentials: 'include'
                     });
@@ -1156,9 +1154,7 @@ class TimelineApp {
                 try {
                     const response = await fetch(`/api/events/${eventId}`, {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: this.getCsrfHeaders(),
                         body: JSON.stringify({ confirmation_title: confirmationTitle }),
                         credentials: 'include'
                     });
@@ -1307,9 +1303,7 @@ class TimelineApp {
             
             const response = await fetch('/api/profile-picture', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: this.getCsrfHeaders(),
                 body: JSON.stringify({
                     profile_picture_encrypted: encrypted
                 }),
@@ -1336,6 +1330,7 @@ class TimelineApp {
         try {
             const response = await fetch('/api/profile-picture', {
                 method: 'DELETE',
+                headers: this.getCsrfHeaders(),
                 credentials: 'include'
             });
 
@@ -1454,6 +1449,7 @@ class TimelineApp {
             // Step 7: Clear all user data from backend
             const clearResponse = await fetch('/api/user-data', {
                 method: 'POST',
+                headers: this.getCsrfHeaders(),
                 credentials: 'include'
             });
             
@@ -1477,9 +1473,7 @@ class TimelineApp {
                     
                     await fetch('/api/events', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: app.getCsrfHeaders(),
                         body: JSON.stringify({
                             title_encrypted: titleEncrypted,
                             description_encrypted: descriptionEncrypted,
@@ -1511,9 +1505,7 @@ class TimelineApp {
                 const encrypted = await cryptoUtils.encrypt(this.profilePicture, this.userPassword);
                 await fetch('/api/profile-picture', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: app.getCsrfHeaders(),
                     body: JSON.stringify({
                         profile_picture_encrypted: encrypted
                     }),
@@ -1608,9 +1600,7 @@ class TimelineApp {
             
             const response = await fetch('/api/settings', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: this.getCsrfHeaders(),
                 body: JSON.stringify({
                     settings_encrypted: settingsEncrypted,
                     display_name_encrypted: displayNameEncrypted
@@ -1661,9 +1651,7 @@ class TimelineApp {
             
             const response = await fetch('/api/notes', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: this.getCsrfHeaders(),
                 body: JSON.stringify({
                     content_encrypted: notesEncrypted
                 }),
@@ -1807,9 +1795,7 @@ class TimelineApp {
                     
                     await fetch('/api/events', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: app.getCsrfHeaders(),
                         body: JSON.stringify({
                             title_encrypted: titleEncrypted,
                             description_encrypted: descriptionEncrypted,
