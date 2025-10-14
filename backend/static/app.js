@@ -176,7 +176,7 @@ class TimelineApp {
             // Step 1: Initialize SRP authentication
             const initResponse = await fetch('/api/login/init', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({ username }),
@@ -197,7 +197,7 @@ class TimelineApp {
             // Step 3: Verify with server
             const verifyResponse = await fetch('/api/login/verify', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -229,7 +229,7 @@ class TimelineApp {
                     
                     const verify2FAResponse = await fetch('/api/verify-2fa', {
                         method: 'POST',
-                        headers: app.getCsrfHeaders(),
+                        headers: {
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({
@@ -341,7 +341,7 @@ class TimelineApp {
         }
     }
     
-    // Helper to get headers with CSRF token
+    // Helper to get headers with CSRF token for POST/DELETE requests
     getCsrfHeaders() {
         const headers = {
             'Content-Type': 'application/json'
@@ -1008,7 +1008,7 @@ class TimelineApp {
                     
                     const response = await fetch(`/api/users/${userId}`, {
                         method: 'POST',
-                        headers: app.getCsrfHeaders(),
+                        headers: {
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({ confirmation_username: confirmationUsername }),
@@ -1156,7 +1156,7 @@ class TimelineApp {
                 try {
                     const response = await fetch(`/api/events/${eventId}`, {
                         method: 'POST',
-                        headers: app.getCsrfHeaders(),
+                        headers: {
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({ confirmation_title: confirmationTitle }),
@@ -1307,7 +1307,7 @@ class TimelineApp {
             
             const response = await fetch('/api/profile-picture', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -1383,7 +1383,7 @@ class TimelineApp {
             // Step 1: Initialize password change with SRP verification
             const initResponse = await fetch('/api/change-password/init', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({}),
@@ -1414,7 +1414,7 @@ class TimelineApp {
             // Step 5: Verify old password and change to new password in backend
             const passwordResponse = await fetch('/api/change-password/verify', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -1477,7 +1477,7 @@ class TimelineApp {
                     
                     await fetch('/api/events', {
                         method: 'POST',
-                        headers: app.getCsrfHeaders(),
+                        headers: {
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({
@@ -1511,7 +1511,7 @@ class TimelineApp {
                 const encrypted = await cryptoUtils.encrypt(this.profilePicture, this.userPassword);
                 await fetch('/api/profile-picture', {
                     method: 'POST',
-                    headers: app.getCsrfHeaders(),
+                    headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
@@ -1608,7 +1608,7 @@ class TimelineApp {
             
             const response = await fetch('/api/settings', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -1661,7 +1661,7 @@ class TimelineApp {
             
             const response = await fetch('/api/notes', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -1807,7 +1807,7 @@ class TimelineApp {
                     
                     await fetch('/api/events', {
                         method: 'POST',
-                        headers: app.getCsrfHeaders(),
+                        headers: {
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify({
@@ -2088,7 +2088,7 @@ class TimelineApp {
             // Step 1: Initialize password change with SRP verification
             const initResponse = await fetch('/api/admin/change-password/init', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({}),
@@ -2115,7 +2115,7 @@ class TimelineApp {
             // Step 4: Verify old password and change to new password
             const response = await fetch('/api/admin/change-password/verify', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -2337,7 +2337,7 @@ class TimelineApp {
         try {
             const response = await fetch('/api/verify-2fa', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -2437,7 +2437,7 @@ class TimelineApp {
             // Step 1: Initialize SRP authentication for 2FA password verification
             const initResponse = await fetch('/api/2fa/verify-password/init', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({}),
@@ -2458,7 +2458,7 @@ class TimelineApp {
             // Step 3: Verify password with server
             const verifyResponse = await fetch('/api/2fa/verify-password/verify', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -2504,7 +2504,7 @@ class TimelineApp {
             // Password has already been verified via SRP in continueEnable2FAStep1
             const response = await fetch('/api/2fa/setup', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({}),
@@ -2571,7 +2571,7 @@ class TimelineApp {
             
             const response = await fetch('/api/2fa/enable', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
@@ -2646,7 +2646,7 @@ class TimelineApp {
             
             const response = await fetch('/api/2fa/disable', {
                 method: 'POST',
-                headers: app.getCsrfHeaders(),
+                headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
